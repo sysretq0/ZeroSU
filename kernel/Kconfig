@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# ZeroSU - kernel/Kconfig
+#
+# For when the module is dropped into a kernel tree instead of built
+# out-of-tree. Nothing here is required by the LKM build path (Kbuild + the
+# Makefile); this exists so the same sources can be wired into an in-tree
+# build as security/zerosu.
+#
+# The dependency list is not decoration: symbols.c provides the resolver that
+# every other file uses to reach internal kernel entry points, and sepolicy.c
+# must run before selinux.c because the latter resolves a context that only
+# exists once the type has been added.
+
+config ZEROSU
+	bool "ZeroSU root session gateway"
+	default n
+	depends on MODULES
+	depends on SECURITY_SELINUX
+	depends on KPROBES
+	depends on CRYPTO_SHA256
+	depends on SECCOMP
+	select CRYPTO
+	select CRYPTO_HASH
+	help
+	  A reboot(2) kprobe gateway that hands authenticated userspace a
+	  session file descriptor, plus credential elevation into a
+	  synthesized SELinux domain.
+
+	  The module refuses to load unless every stage comes up: the kallsyms
+	  bootstrap, the policydb type insertion, the SID resolution, the
+	  sha256 tfm and finally the kprobe. Partial installation is not a
+	  state it will sit in.
+
+	  If unsure, say N.
+
+config ZEROSU_VERBOSE
+	bool "Verbose ZeroSU init logging"
+	depends on ZEROSU
+	default n
+	help
+	  Log each init stage as it completes. Costs nothing at runtime; the
+	  stages are init-only and the module prints one summary line either
+	  way.
+
+config ZEROSU_KEEP_NO_NEW_PRIVS
+	bool "Do not clear PFA_NO_NEW_PRIVS when elevating"
+	depends on ZEROSU
+	default n
+	help
+	  Leave the "cannot gain privileges" flag set on an elevated task.
+
+	  With this set, an elevated process cannot exec a setuid binary or
+	  otherwise pick up privileges it did not already have, because the
+	  kernel refuses the transition. Elevation still applies to the
+	  credentials of the process itself.
+
+	  Only useful when something else in the system is expected to lift
+	  the restriction itself.

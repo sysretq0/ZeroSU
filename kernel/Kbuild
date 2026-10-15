@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# ZeroSU - kernel/Kbuild
+#
+# Kbuild reads this when the tree is asked for an out-of-tree module with
+# M=<path to kernel/>. The wrapper Makefile next to it delegates here, so
+# both entry points (make -C $KDIR M=$PWD/kernel and make in kernel/) do the
+# same thing.
+#
+# Note the source list is explicit. main.c must come last in the link order
+# convention used by the kernel only in the sense that module_init() must be
+# visible; Kbuild handles that, but keeping the list alphabetical-ish and
+# explicit means a new file is never silently left out of the module.
+
+obj-m += zerosu.o
+
+zerosu-y := \
+	main.o \
+	symbols.o \
+	sepolicy.o \
+	selinux.o \
+	supercall.o \
+	seccomp.o \
+	elevate.o \
+	gateway.o
+
+# The module is a GPL one: it calls EXPORT_SYMBOL_GPL entry points such as
+# free_uid() and the crypto shash helpers.
+ccflags-y += -Wall
