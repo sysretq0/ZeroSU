@@ -29,6 +29,9 @@ typedef unsigned int kgid_t;
 #define INVALID_UID ((kuid_t)~0U)
 #define make_kgid(_ns, _v) ((kgid_t)(_v))
 #define make_kuid(_ns, _v) ((kuid_t)(_v))
+#define GLOBAL_ROOT_UID ((kuid_t)0)
+#define uid_eq(_a, _b) ((_a) == (_b))
+static inline kuid_t current_uid(void) { return 0; }
 #define sort(_a, _n, _s, _c, _x) do { (void)(_a); (void)(_n); } while (0)
 typedef int s32;
 #define __rcu

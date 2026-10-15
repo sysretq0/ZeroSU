@@ -23,11 +23,53 @@ ways that show up as panics, silent corruption, or unverifiable claims:
 | Problem | Approach here |
 |---|---|
 | VFS/LSM hooks on hot paths (`execve`, `faccessat`, `stat`, `avc_has_perm`, …) | **One** kprobe, on the `reboot(2)` syscall entry wrapper, and it returns 0 without ever blocking. Everything else happens in `TWA_RESUME` task work on the way back to userspace. |
+| Authorization driven by a caller-supplied struct | The permission mask is derived **only** from kernel state. `zerosu_cmd.flags` is reserved and must arrive as zero; `tests/syntax-check.sh` fails the build if anything reads it for anything else. |
 | "We added a domain to the policy" | The `zsu` type is grown into the **live** `policydb` correctly: all three indexed arrays reallocated with the right allocator, self-bit set at the right index, role authorisation added, `nprim` bumped last as the commit point, and the replaced arrays retired only after a grace period. |
 | Depending on `<objsec.h>` | Zero. The SELinux internals are mirrored locally with `static_assert` on every size and offset, and every version difference is isolated in `compat.h`. |
 | `user_struct` / `ucounts` refcount bugs | The uid swap goes through the kernel's own `alloc_uid()`/`free_uid()` pair, `set_cred_ucounts()` is re-run after the uid change and before the cred is visible, and supplementary groups are sorted (because `in_group_p()` binary searches them) with a balanced `put_group_info()`. |
 | Unload-time use-after-free | A `task_work` that is already queued survives `unregister_kprobe()`. An `inflight_tw` counter, incremented *before* `task_work_add()` and decremented as the last statement of the callback, is what makes module teardown safe. |
 | "It compiles on my kernel" | A 15-cell matrix (5 version anchors × 3 architectures) of `-Wall -Wextra` checks, plus a host-compiled `_Static_assert` ABI test. And an explicit list of what is *not* verified. |
+
+## Authorization model
+
+The gateway is deliberately reachable by unprivileged processes: the kprobe
+runs **before** `sys_reboot`'s `ns_capable(CAP_SYS_BOOT)` check, so any process
+can obtain an anonymous `[zerosu]` fd. That is intentional — the kernel
+capability check governs *rebooting the machine*, not handing out a session
+handle, and a handle alone grants nothing.
+
+Authorization is therefore entirely kernel-side, and there is exactly one path
+to privilege:
+
+```
+  unprivileged process
+      │  reboot(MAGIC1, MAGIC2, mode, &fd)      → anonymous session fd
+      │
+      ├─ AUTH_SET_KEY   requires !key_enrolled && uid == 0
+      │                 (one-time bootstrap of the device master key)
+      │
+      ├─ AUTH_VERIFY    sends a digest; constant-time compare against the
+      │                 module-global key_digest
+      │                 → on success only: ctx->authenticated = true
+      │
+      └─ ELEVATE        requires ctx->authenticated  (ZSU_PERM_KEY)
+```
+
+Two properties are load-bearing:
+
+- **The mask is never caller-supplied.** `zerosu_session_perm()` computes it
+  from `key_enrolled`, `current_uid()` and the session's `authenticated` bit.
+  Reading a permission bit out of `struct zerosu_cmd` would be equivalent to a
+  server honouring a client-supplied `X-Is-Admin: true` header.
+- **`AUTH_VERIFY` refuses before it compares.** With no key enrolled,
+  `key_digest` is 32 zero bytes, so an attacker-supplied block of 32 zeros
+  would otherwise match it and authenticate.
+
+`key_digest` is module-global **on purpose**: that is the SuperKey model — one
+device-wide master key enrolled once by the privileged loader, against which
+every later session authenticates. Scoping it per-session would be
+self-defeating, since a fresh session could then enrol its own key and
+elevate itself.
 
 ---
 
@@ -119,6 +161,19 @@ valuable artifact in the repository.
 | `struct seccomp` is stable | 5.10 has an extra `filter_count` between `mode` and `filter`. It is a public header, so there is nothing to mirror. | `include/seccomp.h` |
 | `cap_bset` is refcounted | It is a plain `kernel_cap_t` embedded by value in `struct cred`. Writing it is an assignment. | `cred.h:132` / `:125` |
 
+### Bugs that were in this code, and are now regression-tested
+
+Kept here because a reference implementation that hides its own mistakes is
+worth less than one that names them.
+
+| Bug | Impact | Guard |
+|---|---|---|
+| `zerosu_check_perm()` took the caller's `hdr.flags` as the permission mask | **Complete authentication bypass.** Any process with a session fd set `ZSU_PERM_KEY` and called `ELEVATE` directly, skipping `AUTH_VERIFY`. | `syntax-check.sh` check 3: any use of `hdr.flags` other than the zero-rejection fails the build |
+| `AUTH_VERIFY` compared before checking enrollment | With no key enrolled, 32 zero bytes from userspace matched the zeroed `key_digest` | Ordering is now enforced and commented at the call site |
+| `AUTH_SET_KEY` gated on `hdr.flags & ZSU_PERM_ENROLL` | Any process could enrol the device master key | Gate is now `!key_enrolled && uid == 0` |
+| `kallsyms` resolve of `clear_task_syscall_work()` | Always NULL — it is a macro, so the `SYSCALL_WORK_SECCOMP` bit was never cleared | Now a direct macro call |
+| `u32` used in the UAPI header | Compiled in the kernel, **unusable** from userspace | `tests/smoke_test.c` builds against the real header |
+
 ### Structural facts the design leans on
 
 - **Three different indexing conventions for three type bitmaps**, in one
@@ -175,7 +230,7 @@ valuable artifact in the repository.
 sh tests/syntax-check.sh
 ```
 
-Two independent checks, neither needing a kernel tree:
+Three independent checks, none needing a kernel tree:
 
 1. **UAPI ABI** — `tests/abi_layout.c` compiles with `-Werror` against the real
    header and asserts every struct size and field offset, then prints them.
@@ -188,12 +243,18 @@ Two independent checks, neither needing a kernel tree:
    architectures = 15 cells**, with `CONFIG_ARM64`/`CONFIG_X86_64`/`CONFIG_RISCV`
    driving `arch.h` so a change to one arch's branch cannot silently break
    another.
+3. **Authorization regression guard** — greps for the historical bypass: any
+   use of `hdr.flags` other than rejecting a non-zero value, a missing
+   `ctx->authenticated` gate, or enrollment not restricted to uid 0 fails the
+   run. It exists because the compiler *cannot* catch this class of bug — the
+   flawed version was perfectly well-typed. Both faults were confirmed to fail
+   the check by deliberate injection.
 
 The stub harness earned its keep: it caught a wrong `set_cred_ucounts` return
-type, a `cap_raise()` called by value instead of by pointer, a
-`cap_bset` modelled as a pointer, a const-violating `put_cred()`, a dangling
-`goto` label, and `u32` leaking into the UAPI header (which compiles fine in
-the kernel and is *unusable* from userspace).
+type, a `cap_raise()` called by value instead of by pointer, a `cap_bset`
+modelled as a pointer, a const-violating `put_cred()`, a dangling `goto` label,
+and `u32` leaking into the UAPI header (which compiles fine in the kernel and
+is *unusable* from userspace).
 
 ### What is NOT verified
 

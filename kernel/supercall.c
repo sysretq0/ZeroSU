@@ -147,42 +147,77 @@ static int zerosu_payload_len(u32 opcode, u32 *len)
 }
 
 /*
- * Check the permissions a command needs. ROOT is a hard requirement on the
- * elevating commands; KEY and ENROLL depend on enrollment state, which the
- * caller must already hold key_lock for.
+ * Authorization, derived entirely from kernel state.
+ *
+ * NOTHING in struct zerosu_cmd is trusted for authorization. The header is
+ * caller-supplied, so reading a permission bit out of it is the equivalent of
+ * a server honouring a client-supplied "X-Is-Admin: true" header: anyone
+ * holding a session fd could set ZSU_PERM_KEY and skip AUTH_VERIFY outright.
+ * The mask below is computed only from things the kernel knows:
+ *
+ *   ZSU_PERM_ENROLL  only while no master key exists *and* the caller is uid
+ *                    0, so the privileged bootstrap that inserted the module
+ *                    enrolls the device SuperKey once and nothing else can.
+ *   ZSU_PERM_KEY     only after this session passed AUTH_VERIFY, i.e. the
+ *                    constant-time compare in zerosu_cmd_verify_key().
+ *                    ctx->authenticated is written in exactly one place and
+ *                    is not reachable from userspace.
+ *
+ * Caller must hold key_lock.
  */
-static int zerosu_check_perm(u32 opcode, u32 flags, const struct zsu_session *ctx)
+static u32 zerosu_session_perm(const struct zsu_session *ctx)
+{
+	u32 perm = ZSU_PERM_ANY;
+
+	if (!key_enrolled && uid_eq(current_uid(), GLOBAL_ROOT_UID))
+		perm |= ZSU_PERM_ENROLL;
+
+	if (ctx->authenticated)
+		perm |= ZSU_PERM_KEY;
+
+	return perm;
+}
+
+/* What a command needs. 0 means "anyone may attempt it". */
+static u32 zerosu_perm_required(u32 opcode)
 {
 	switch (opcode) {
+	case ZSU_CMD_AUTH_SET_KEY:
+		return ZSU_PERM_ENROLL;
+	case ZSU_CMD_GET_PROFILE:
+	case ZSU_CMD_ELEVATE:
+	case ZSU_CMD_ELEVATE_TASK:
+		return ZSU_PERM_KEY;
 	case ZSU_CMD_PING:
 	case ZSU_CMD_GET_INFO:
 	case ZSU_CMD_GET_STATUS:
 	case ZSU_CMD_NEXT_EVENT:
-		return ZSU_PERM_ANY;
-
-	case ZSU_CMD_AUTH_SET_KEY:
-		if (!(flags & ZSU_PERM_ENROLL))
-			return -EPERM;
-		return 0;
-
 	case ZSU_CMD_AUTH_VERIFY:
-		if (!key_enrolled)
-			return -ENOKEY;
+	default:
+		/*
+		 * AUTH_VERIFY deliberately needs nothing: it *is* the
+		 * authentication, so requiring a permission would be circular.
+		 */
 		return 0;
+	}
+}
 
+/*
+ * Session flavour is a *request*, not a grant: ctx->type comes from the
+ * reboot(2) argument, which the caller also chooses. It is therefore policy,
+ * not security - the actual gate on elevation is ZSU_PERM_KEY.
+ */
+static int zerosu_check_session_type(const struct zsu_session *ctx, u32 opcode)
+{
+	switch (opcode) {
 	case ZSU_CMD_GET_PROFILE:
 	case ZSU_CMD_ELEVATE:
 	case ZSU_CMD_ELEVATE_TASK:
 		if (ctx->type != ZSU_SESSION_SU)
 			return -EPERM;
-		if (!key_enrolled)
-			return -ENOKEY;
-		if (!(flags & ZSU_PERM_KEY))
-			return -EPERM;
 		return 0;
-
 	default:
-		return -EINVAL;
+		return 0;
 	}
 }
 
@@ -213,7 +248,13 @@ static int zerosu_cmd_set_key(struct zsu_session *ctx, void __user *payload)
 	return 0;
 }
 
-static long zerosu_cmd_verify_key(void __user *payload)
+/*
+ * Prove knowledge of the device master key.
+ *
+ * This is the only path that grants ZSU_PERM_KEY, so it is deliberately the
+ * dullest function in the file.
+ */
+static long zerosu_cmd_verify_key(struct zsu_session *ctx, void __user *payload)
 {
 	u8 digest[ZSU_DIGEST_LEN];
 	int rc;
@@ -222,13 +263,27 @@ static long zerosu_cmd_verify_key(void __user *payload)
 		return -EFAULT;
 
 	lockdep_assert_held(&key_lock);
-	if (!key_enrolled)
+
+	/*
+	 * Refuse *before* comparing, and this ordering matters: with no key
+	 * enrolled, key_digest is 32 zero bytes, so an attacker-supplied block
+	 * of 32 zeros would otherwise match it and authenticate.
+	 */
+	if (!key_enrolled) {
+		memset(digest, 0, sizeof(digest));
 		return -ENOKEY;
+	}
 
 	rc = zerosu_digest_eq(key_digest, digest) ? 0 : -EACCES;
 	memset(digest, 0, sizeof(digest));
+	if (rc)
+		return rc;
 
-	return rc;
+	/* The one and only transition from anonymous to authorized. */
+	ctx->authenticated = true;
+	ctx->flags |= ZSU_PERM_KEY;
+
+	return 0;
 }
 
 /*
@@ -328,6 +383,21 @@ long zerosu_supercall_ioctl(struct file *file, unsigned int cmd,
 		return -EINVAL;
 	}
 
+	/*
+	 * flags is reserved and MUST arrive as zero.
+	 *
+	 * It is not "currently unused, be nice": accepting a caller-supplied
+	 * permission mask would hand every unprivileged process with a session
+	 * fd the ability to claim ZSU_PERM_KEY and skip AUTH_VERIFY. The
+	 * kernel derives the real mask in zerosu_session_perm(). Rejecting the
+	 * field outright means a future regression that starts reading it again
+	 * fails loudly instead of silently reopening the bypass.
+	 */
+	if (hdr.flags != 0) {
+		ctx->last_error = -EINVAL;
+		return -EINVAL;
+	}
+
 	/* Exact size or nothing. */
 	if (zerosu_payload_len(hdr.opcode, &want_len)) {
 		ctx->last_error = -EINVAL;
@@ -343,8 +413,8 @@ long zerosu_supercall_ioctl(struct file *file, unsigned int cmd,
 	/*
 	 * Two locks, taken in this order everywhere: event_lock nests inside
 	 * key_lock nowhere and vice versa, so there is no cycle to deadlock
-	 * on. key_lock is taken for the auth commands because the permission
-	 * check reads key_enrolled.
+	 * on. key_lock is held for every command whose authorization depends on
+	 * key_enrolled or on this session's authenticated bit.
 	 */
 	if (hdr.opcode == ZSU_CMD_AUTH_SET_KEY ||
 	    hdr.opcode == ZSU_CMD_AUTH_VERIFY ||
@@ -357,11 +427,19 @@ long zerosu_supercall_ioctl(struct file *file, unsigned int cmd,
 	    hdr.opcode == ZSU_CMD_GET_STATUS)
 		mutex_lock(&ctx->event_lock);
 
-	ret = zerosu_check_perm(hdr.opcode, hdr.flags, ctx);
-	if (ret) {
-		ctx->last_error = (s32)ret;
-		goto out_unlock;
+	/*
+	 * Authorization: derive the caller's mask from kernel state and test
+	 * the command's requirement against it. hdr.flags is not an input here
+	 * and must never become one.
+	 */
+	if (zerosu_perm_required(hdr.opcode) & ~zerosu_session_perm(ctx)) {
+		ret = -EPERM;
+		goto out_perm;
 	}
+
+	ret = zerosu_check_session_type(ctx, hdr.opcode);
+	if (ret)
+		goto out_perm;
 
 	switch (hdr.opcode) {
 	case ZSU_CMD_PING: {
@@ -429,7 +507,7 @@ long zerosu_supercall_ioctl(struct file *file, unsigned int cmd,
 		}
 		break;
 	case ZSU_CMD_AUTH_VERIFY:
-		ret = zerosu_cmd_verify_key(payload);
+		ret = zerosu_cmd_verify_key(ctx, payload);
 		mutex_lock(&ctx->event_lock);
 		zerosu_note_auth(ctx, ret == 0);
 		mutex_unlock(&ctx->event_lock);
@@ -438,8 +516,16 @@ long zerosu_supercall_ioctl(struct file *file, unsigned int cmd,
 	 * zerosu_cmd.arg is multiplexed by opcode: for ELEVATE it is the
 	 * elevation mode, for ELEVATE_TASK it is the pid and the mode follows
 	 * from the opcode. Documented in uapi/zerosu.h.
+	 *
+	 * ELEVATE is strictly self-elevation and ELEVATE_TASK is strictly
+	 * target-pid elevation. Keeping the two disjoint means there is no
+	 * argument value that makes one command do the other's job.
 	 */
 	case ZSU_CMD_ELEVATE:
+		if (hdr.arg != ZSU_ELEVATE_MODE_SELF) {
+			ret = -EINVAL;
+			break;
+		}
 		ret = zerosu_elevate(hdr.arg);
 		break;
 	case ZSU_CMD_ELEVATE_TASK:
@@ -480,6 +566,7 @@ long zerosu_supercall_ioctl(struct file *file, unsigned int cmd,
 	else
 		ctx->last_error = (s32)ret;
 
+out_perm:
 	/* Elevation bookkeeping, only on a clean success. */
 	if (!ret && (hdr.opcode == ZSU_CMD_ELEVATE ||
 		     hdr.opcode == ZSU_CMD_ELEVATE_TASK)) {
@@ -487,6 +574,9 @@ long zerosu_supercall_ioctl(struct file *file, unsigned int cmd,
 		zerosu_note_elevated(ctx, hdr.arg);
 		mutex_unlock(&ctx->event_lock);
 	}
+
+	if (ret)
+		ctx->last_error = (s32)ret;
 
 out_unlock:
 	if (hdr.opcode == ZSU_CMD_NEXT_EVENT ||

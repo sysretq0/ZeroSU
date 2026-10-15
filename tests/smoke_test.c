@@ -85,7 +85,6 @@ int main(int argc, char **argv)
 	memset(&buf, 0, sizeof(buf));
 	buf.hdr.magic = ZSU_CMD_MAGIC;
 	buf.hdr.opcode = ZSU_CMD_PING;
-	buf.hdr.flags = ZSU_PERM_ANY;
 	if (ioctl(fd, ZSU_IO(ZSU_IOC_NR(ZSU_CMD_PING)), &buf.hdr) < 0) {
 		perror("PING");
 		close(fd);
@@ -102,8 +101,7 @@ int main(int argc, char **argv)
 		memset(buf.key, 0x5a, sizeof(buf.key));
 		buf.hdr.magic = ZSU_CMD_MAGIC;
 		buf.hdr.opcode = ZSU_CMD_AUTH_SET_KEY;
-		buf.hdr.flags = ZSU_PERM_ENROLL;
-		buf.hdr.inlen = ZSU_PAYLOAD_KEY;
+			buf.hdr.inlen = ZSU_PAYLOAD_KEY;
 		if (ioctl(fd, ZSU_IO(ZSU_IOC_NR(ZSU_CMD_AUTH_SET_KEY)), &buf.hdr) < 0) {
 			perror("AUTH_SET_KEY");
 			close(fd);
@@ -121,8 +119,7 @@ int main(int argc, char **argv)
 		memset(buf.raw, 0, sizeof(buf.raw));
 		buf.hdr.magic = ZSU_CMD_MAGIC;
 		buf.hdr.opcode = ZSU_CMD_AUTH_VERIFY;
-		buf.hdr.flags = ZSU_PERM_KEY;
-		buf.hdr.inlen = ZSU_PAYLOAD_DIGEST;
+			buf.hdr.inlen = ZSU_PAYLOAD_DIGEST;
 		if (ioctl(fd, ZSU_IO(ZSU_IOC_NR(ZSU_CMD_AUTH_VERIFY)), &buf.hdr) < 0) {
 			perror("AUTH_VERIFY");
 			close(fd);
@@ -132,8 +129,7 @@ int main(int argc, char **argv)
 		memset(&buf, 0, sizeof(buf));
 		buf.hdr.magic = ZSU_CMD_MAGIC;
 		buf.hdr.opcode = ZSU_CMD_ELEVATE;
-		buf.hdr.flags = ZSU_PERM_KEY;
-		buf.hdr.arg = ZSU_ELEVATE_MODE_SELF;
+			buf.hdr.arg = ZSU_ELEVATE_MODE_SELF;
 		if (ioctl(fd, ZSU_IO(ZSU_IOC_NR(ZSU_CMD_ELEVATE)), &buf.hdr) < 0) {
 			perror("ELEVATE");
 			close(fd);

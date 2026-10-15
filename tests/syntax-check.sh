@@ -95,6 +95,42 @@ for arch in arm64 x86_64 riscv; do
 done
 
 say ""
+say "=== 3. Authorization regression guard ==="
+#
+# Historical bug: zerosu_check_perm() took the caller's hdr.flags as its
+# permission mask, so any process holding a session fd could set ZSU_PERM_KEY
+# and skip AUTH_VERIFY entirely. The compiler cannot catch that - it is a
+# perfectly well-typed program - so it is checked here.
+#
+# The rule: struct zerosu_cmd is untrusted input. The only legitimate use of
+# hdr.flags is rejecting a non-zero value outright.
+fail_perm=0
+
+bad=$(grep -n 'hdr\.flags' "$ROOT"/kernel/*.c \
+	| grep -v 'hdr\.flags != 0' \
+	| grep -vE ':[0-9]+:[[:space:]]*(\*|/\*|//)' || true)
+if [ -n "$bad" ]; then
+	printf 'FAIL: hdr.flags used for anything but rejection:\n%s\n' "$bad"
+	fail_perm=1
+fi
+
+if ! grep -q 'ctx->authenticated' "$ROOT"/kernel/supercall.c; then
+	printf 'FAIL: no ctx->authenticated gate in supercall.c\n'
+	fail_perm=1
+fi
+
+if ! grep -q 'GLOBAL_ROOT_UID' "$ROOT"/kernel/supercall.c; then
+	printf 'FAIL: enrollment is not restricted to uid 0\n'
+	fail_perm=1
+fi
+
+if [ "$fail_perm" -eq 0 ]; then
+	printf 'ok: hdr.flags rejected, permissions kernel-derived\n'
+else
+	fail=1
+fi
+
+say ""
 if [ "$fail" -eq 0 ]; then
 	say "RESULT: PASS"
 else

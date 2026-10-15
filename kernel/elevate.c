@@ -240,8 +240,13 @@ static int do_elevate(struct task_struct *tsk, u32 mode)
 
 	if (!tsk || !tsk->signal)
 		return -EINVAL;
+	/*
+	 * ELEVATE is strictly self-elevation and ELEVATE_TASK is strictly
+	 * target-pid elevation; the ioctl layer already enforces the mapping,
+	 * and this is the second gate.
+	 */
 	if (mode != ZSU_ELEVATE_MODE_SELF && mode != ZSU_ELEVATE_MODE_TASK)
-		return -ENOTSUP;
+		return -EINVAL;
 
 	new_cred = zsu_build_cred();
 	if (!new_cred)
@@ -278,7 +283,7 @@ int zerosu_elevate_task(u32 pid_nr, u32 mode)
 	int rc;
 
 	if (mode != ZSU_ELEVATE_MODE_TASK)
-		return -ENOTSUP;
+		return -EINVAL;
 	if (!pid_nr)
 		return -EINVAL;
 

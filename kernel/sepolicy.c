@@ -317,6 +317,15 @@ out_free_new_rcu:
 	mutex_unlock(mtx);
 	/* The published arrays may have been read: wait before freeing. */
 	synchronize_rcu();
+	/*
+	 * We set one bit in new_tam[val - 1] before publishing, which may have
+	 * allocated a node inside it. kvfree() on the array would leak that
+	 * node, so unwind the ebitmap first. Safe to call unconditionally:
+	 * ebitmap_destroy() on a zeroed ebitmap is a no-op, and by the time we
+	 * reach the symtab_insert() failure the slot has been initialised.
+	 */
+	if (zsu_ebitmap_destroy)
+		zsu_ebitmap_destroy(&new_tam[val - 1]);
 out_free_new:
 	kvfree(new_tvs);
 	kvfree(new_tam);

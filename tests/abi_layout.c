@@ -67,7 +67,7 @@ _Static_assert(offsetof(struct zerosu_event, payload) == 16, "payload @16");
 _Static_assert(sizeof(struct zerosu_event) == 80, "event is 80 bytes");
 
 /* ---- constants ------------------------------------------------------- */
-_Static_assert(ZSU_ABI_VERSION == 1, "abi version");
+_Static_assert(ZSU_ABI_VERSION == 2, "abi version");
 _Static_assert(ZSU_GATEWAY_MAGIC1 == 0x5A455255u, "magic1");
 _Static_assert(ZSU_GATEWAY_MAGIC2 == 0x00005355u, "magic2");
 _Static_assert(ZSU_SESSION_PLAIN == 0, "plain session");

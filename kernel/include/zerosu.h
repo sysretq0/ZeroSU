@@ -110,6 +110,12 @@ struct zsu_session {
 	u32 type;			/* ZSU_SESSION_PLAIN | ZSU_SESSION_SU */
 	u64 flags;
 	bool elevated;
+	/*
+	 * Set in exactly one place - zerosu_cmd_verify_key() - after the
+	 * constant-time digest compare succeeds. Never derived from anything in
+	 * struct zerosu_cmd.
+	 */
+	bool authenticated;
 	s32 last_error;			/* negative errno of the last failure */
 	u64 grants;			/* successful elevations this session */
 	u32 last_grant_mode;

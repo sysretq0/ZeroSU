@@ -176,6 +176,15 @@ out:
  * caller is unprivileged) before its switch(cmd), so no part of the real
  * reboot path runs. There is deliberately no argument stomping here - with
  * the correct parameter order there is nothing left to neutralise.
+ *
+ * This runs *before* sys_reboot's ns_capable(CAP_SYS_BOOT) check, and that is
+ * intentional rather than incidental. The kernel capability check governs
+ * rebooting the machine; it has nothing to do with handing out a session fd,
+ * and a session fd grants nothing on its own. Keeping the kprobe ahead of it
+ * is what lets an unprivileged process (the su CLI, the manager) open an
+ * anonymous [zerosu] fd and then authenticate against the device master key
+ * over ioctl. Authorization lives in supercall.c's zerosu_session_perm(); if
+ * this handler required CAP_SYS_BOOT, the SuperKey flow would be pointless.
  */
 static int zerosu_reboot_pre(struct kprobe *kp, struct pt_regs *kp_regs)
 {

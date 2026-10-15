@@ -27,7 +27,7 @@
 #include <linux/ioctl.h>
 #endif
 
-#define ZSU_ABI_VERSION		1
+#define ZSU_ABI_VERSION		2
 
 /* Gateway handshake. MAGIC1 is also the per command echo value. */
 #define ZSU_GATEWAY_MAGIC1	0x5A455255u	/* "ZERU" */
@@ -139,7 +139,8 @@ enum {
  * struct zerosu_cmd - the fixed size command header
  * @magic:  ZSU_CMD_MAGIC; the kernel rejects anything else
  * @opcode: ZSU_CMD_*
- * @flags:  ZSU_PERM_* bitmask
+ * @flags:  RESERVED, must be 0. The kernel derives its own ZSU_PERM_*
+ *          mask from session state; a non-zero value is -EINVAL.
  * @arg:    multiplexed by opcode: ZSU_ELEVATE_MODE_* for ZSU_CMD_ELEVATE,
  *          the target pid for ZSU_CMD_ELEVATE_TASK (whose mode follows from
  *          the opcode), unused elsewhere
