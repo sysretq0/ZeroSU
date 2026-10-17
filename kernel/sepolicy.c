@@ -43,7 +43,7 @@
 #define ZSU_TYPE_NAME	"zsu"
 #define ZSU_ROLE_NAME	"r"
 
-struct zsu_selinux_policy **zsu_policy_slot;
+struct selinux_policy **zsu_policy_slot;
 struct mutex *zsu_policy_mutex_cached;
 
 /*
@@ -55,10 +55,10 @@ struct mutex *zsu_policy_mutex_cached;
  */
 int zsu_selinux_discover(void)
 {
-	const size_t home = offsetof(struct zsu_selinux_state, policy);
-	struct zsu_selinux_state *state = zsu_selinux_state;
-	struct zsu_selinux_policy **cand_slot;
-	struct zsu_selinux_policy *pol;
+	const size_t home = offsetof(struct selinux_state, policy);
+	struct selinux_state *state = zsu_selinux_state;
+	struct selinux_policy **cand_slot;
+	struct selinux_policy *pol;
 	size_t off;
 	int slot;
 
@@ -78,7 +78,7 @@ int zsu_selinux_discover(void)
 				continue;
 		}
 
-		cand_slot = (struct zsu_selinux_policy **)((char *)state + off);
+		cand_slot = (struct selinux_policy **)((char *)state + off);
 		pol = *cand_slot;
 		if (!pol)
 			continue;
@@ -127,19 +127,17 @@ static void *zsu_grow_array(const void *old, size_t old_elems, size_t elemsize)
 }
 
 /*
- * Mark an already present type usable again. Never clears the permissive
- * bit, so a second module load is a no-op.
+ * Mark an already present type usable again. ebitmap_set_bit(value=1) is
+ * idempotent, so a second module load is a no-op. The permissive bit is only
+ * ever set, never cleared, which is why there is no get_bit round trip.
  */
-static int zsu_sepolicy_adopt(struct zsu_policydb *p, u32 val)
+static int zsu_sepolicy_adopt(struct policydb *p, u32 val)
 {
 	/*
 	 * permissive_map is indexed by the raw type value, unlike every other
 	 * type bitmap:  services.c does
 	 *     ebitmap_get_bit(&policydb->permissive_map, scontext->type)
 	 */
-	if (zsu_ebitmap_get_bit(&p->permissive_map, val))
-		return 0;
-
 	return zsu_ebitmap_set_bit(&p->permissive_map, val, 1);
 }
 
@@ -157,7 +155,6 @@ static int zsu_sepolicy_adopt(struct zsu_policydb *p, u32 val)
  */
 __typeof__(zsu_selinux_state) zsu_selinux_state;
 __typeof__(zsu_ebitmap_set_bit) zsu_ebitmap_set_bit;
-__typeof__(zsu_ebitmap_get_bit) zsu_ebitmap_get_bit;
 __typeof__(zsu_ebitmap_destroy) zsu_ebitmap_destroy;
 __typeof__(zsu_symtab_insert) zsu_symtab_insert;
 __typeof__(zsu_symtab_search) zsu_symtab_search;
@@ -165,7 +162,6 @@ __typeof__(zsu_symtab_search) zsu_symtab_search;
 static struct zsu_symtab_ent sepolicy_syms[] = {
 	{ "selinux_state",			(void **)&zsu_selinux_state,		true },
 	{ "ebitmap_set_bit",			(void **)&zsu_ebitmap_set_bit,		true },
-	{ "ebitmap_get_bit",			(void **)&zsu_ebitmap_get_bit,		true },
 	{ "symtab_insert",			(void **)&zsu_symtab_insert,		true },
 	{ "symtab_search",			(void **)&zsu_symtab_search,		true },
 	/* only used on the rollback paths, hence optional */
@@ -180,12 +176,12 @@ int zsu_sepolicy_syms_init(void)
 
 static int zsu_sepolicy_add(void)
 {
-	struct zsu_type_datum **old_tvs, **new_tvs;
-	struct zsu_ebitmap *old_tam, *new_tam;
+	struct type_datum **old_tvs, **new_tvs;
+	struct ebitmap *old_tam, *new_tam;
 	char **old_svn, **new_svn;
-	struct zsu_type_datum *td, *existing;
-	struct zsu_role_datum *role;
-	struct zsu_policydb *p;
+	struct type_datum *td, *existing;
+	struct role_datum *role;
+	struct policydb *p;
 	struct mutex *mtx;
 	char *key;
 	u32 old_nprim, val;

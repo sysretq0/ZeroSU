@@ -166,92 +166,108 @@
 #define ZSU_SYM_ROLES 2
 #define ZSU_SYM_NUM   8
 
+/*
+ * CFI: the mirror structs below deliberately carry the *kernel's* tag names
+ * (struct ebitmap, struct symtab, struct selinux_state, ...) instead of a
+ * private zsu_ prefix.
+ *
+ * Clang CFI's cross-DSO type id is a hash of the function's mangled type.
+ * A pointer parameter spelled "struct zsu_symtab *" therefore gets a
+ * *different* id than the kernel's "struct symtab *" (verified: 0x1502...
+ * vs 0x9969... at the same call site), so every indirect call to a resolved
+ * kernel function would fail the kernel's __cfi_check() and panic with
+ * "CFI failure". Naming the mirrors exactly as the kernel does - tag,
+ * constness and parameter widths - is what makes the compiler emit a
+ * matching id. The layout is still mirrored rather than included: none of
+ * these tags is declared in any header an out-of-tree module may include.
+ */
+
 /* --- security/selinux/ss/ebitmap.h --- */
-struct zsu_ebitmap_node;
-struct zsu_ebitmap {
-	struct zsu_ebitmap_node *node;
+struct ebitmap_node;
+struct ebitmap {
+	struct ebitmap_node *node;
 	u32 highbit;
 };
 
 /* --- security/selinux/ss/hashtab.h --- */
-struct zsu_hashtab_node {
+struct hashtab_node {
 	void *key;
 	void *datum;
-	struct zsu_hashtab_node *next;
+	struct hashtab_node *next;
 };
-struct zsu_hashtab {
-	struct zsu_hashtab_node **htable;
+struct hashtab {
+	struct hashtab_node **htable;
 	u32 size;
 	u32 nel;
 };
 
 /* --- security/selinux/ss/symtab.h --- */
-struct zsu_symtab {
-	struct zsu_hashtab table;
+struct symtab {
+	struct hashtab table;
 	u32 nprim;
 };
 
 /* --- security/selinux/ss/policydb.h --- */
-struct zsu_type_datum {
+struct type_datum {
 	u32 value;
 	u32 bounds;
 	unsigned char primary;
 	unsigned char attribute;
 };
 
-struct zsu_role_datum {
+struct role_datum {
 	u32 value;
 	u32 bounds;
-	struct zsu_ebitmap dominates;
-	struct zsu_ebitmap types;
+	struct ebitmap dominates;
+	struct ebitmap types;
 };
 
-struct zsu_mls_level {
+struct mls_level {
 	u32 sens;
-	struct zsu_ebitmap cat;
+	struct ebitmap cat;
 };
-struct zsu_mls_range {
-	struct zsu_mls_level level[2];
+struct mls_range {
+	struct mls_level level[2];
 };
-struct zsu_user_datum {
+struct user_datum {
 	u32 value;
 	u32 bounds;
-	struct zsu_ebitmap roles;
-	struct zsu_mls_range range;
-	struct zsu_mls_level dfltlevel;
+	struct ebitmap roles;
+	struct mls_range range;
+	struct mls_level dfltlevel;
 };
-struct zsu_common_datum {
+struct common_datum {
 	u32 value;
-	struct zsu_symtab permissions;
+	struct symtab permissions;
 };
-struct zsu_constraint_node;
-struct zsu_class_datum {
+struct constraint_node;
+struct class_datum {
 	u32 value;
 	char *comkey;
-	struct zsu_common_datum *comdatum;
-	struct zsu_symtab permissions;
-	struct zsu_constraint_node *constraints;
-	struct zsu_constraint_node *validatetrans;
+	struct common_datum *comdatum;
+	struct symtab permissions;
+	struct constraint_node *constraints;
+	struct constraint_node *validatetrans;
 	char default_user;
 	char default_role;
 	char default_type;
 	char default_range;
 };
 
-struct zsu_avtab_node;
-struct zsu_avtab {
-	struct zsu_avtab_node **htable;
+struct avtab_node;
+struct avtab {
+	struct avtab_node **htable;
 	u32 nel;
 	u32 nslot;
 	u32 mask;
 };
 
-struct zsu_cond_bool_datum {
+struct cond_bool_datum {
 	u32 value;
 	int state;
 };
 
-struct zsu_policydb {
+struct policydb {
 	int mls_enabled;
 	/*
 	 * Android's policydb carries its two netlink policy flags *here*,
@@ -266,7 +282,7 @@ struct zsu_policydb {
 	int android_netlink_getneigh;
 
 	/* symbol tables */
-	struct zsu_symtab symtab[ZSU_SYM_NUM];
+	struct symtab symtab[ZSU_SYM_NUM];
 #define p_commons	symtab[0]
 #define p_classes	symtab[1]
 #define p_roles		symtab[2]
@@ -277,23 +293,23 @@ struct zsu_policydb {
 	char **sym_val_to_name[ZSU_SYM_NUM];
 
 	/* class, role, and user attributes indexed by (value - 1) */
-	struct zsu_class_datum **class_val_to_struct;
-	struct zsu_role_datum **role_val_to_struct;
-	struct zsu_user_datum **user_val_to_struct;
-	struct zsu_type_datum **type_val_to_struct;
+	struct class_datum **class_val_to_struct;
+	struct role_datum **role_val_to_struct;
+	struct user_datum **user_val_to_struct;
+	struct type_datum **type_val_to_struct;
 
 	/* type enforcement access vectors and transitions */
-	struct zsu_avtab te_avtab;
+	struct avtab te_avtab;
 
 	/* role transitions */
-	struct zsu_hashtab role_tr;
+	struct hashtab role_tr;
 
-	struct zsu_ebitmap filename_trans_ttypes;
-	struct zsu_hashtab filename_trans;
+	struct ebitmap filename_trans_ttypes;
+	struct hashtab filename_trans;
 	u32 compat_filename_trans_count;
 
-	struct zsu_cond_bool_datum **bool_val_to_struct;
-	struct zsu_avtab te_cond_avtab;
+	struct cond_bool_datum **bool_val_to_struct;
+	struct avtab te_cond_avtab;
 	void *cond_list;
 	u32 cond_list_len;
 
@@ -302,13 +318,13 @@ struct zsu_policydb {
 	void *ocontexts[9];
 
 	void *genfs;
-	struct zsu_hashtab range_tr;
+	struct hashtab range_tr;
 
 	/* type -> attribute reverse mapping, indexed by (value - 1) */
-	struct zsu_ebitmap *type_attr_map_array;
+	struct ebitmap *type_attr_map_array;
 
-	struct zsu_ebitmap policycaps;
-	struct zsu_ebitmap permissive_map;
+	struct ebitmap policycaps;
+	struct ebitmap permissive_map;
 	/* 6.18 adds neveraudit_map here; unreachable from any offset above. */
 };
 
@@ -345,9 +361,9 @@ struct zsu_cred_sec {
 #define ZSU_LBS_CRED_MAX	256
 
 /* --- security/selinux/ss/services.h: struct selinux_policy --- */
-struct zsu_selinux_policy {
+struct selinux_policy {
 	void *sidtab;			/* struct sidtab * */
-	struct zsu_policydb policydb;
+	struct policydb policydb;
 	void *map;			/* struct selinux_map * */
 	u32 latest_granting;
 };
@@ -358,7 +374,7 @@ struct zsu_selinux_policy {
  * the policycap[] length and on which Android bools still exist, hence the
  * four variants above.
  */
-struct zsu_selinux_state {
+struct selinux_state {
 #if defined(CONFIG_SECURITY_SELINUX_DISABLE)
 	bool disabled;
 #endif
@@ -379,24 +395,24 @@ struct zsu_selinux_state {
 #if defined(ZSU_SELINUX_STATE_HAS_AVC)
 	void *avc;
 #endif
-	struct zsu_selinux_policy *__rcu policy;
+	struct selinux_policy *__rcu policy;
 	struct mutex policy_mutex;
 };
 
 /* Compile-time tripwire: if a mirror field is edited or the kernel struct
  * gains a member, these fire instead of an OOB access at runtime. Sizes
  * below are the observed kernel values on all six GKI branches. */
-static_assert(sizeof(struct zsu_ebitmap) == 16, "zsu: ebitmap layout drift");
-static_assert(sizeof(struct zsu_hashtab) == 16, "zsu: hashtab layout drift");
-static_assert(sizeof(struct zsu_symtab) == 24, "zsu: symtab layout drift");
-static_assert(sizeof(struct zsu_type_datum) == 12, "zsu: type_datum drift");
-static_assert(sizeof(struct zsu_avtab) == 24, "zsu: avtab layout drift");
-static_assert(sizeof(struct zsu_mls_level) == 24, "zsu: mls_level drift");
-static_assert(sizeof(struct zsu_mls_range) == 48, "zsu: mls_range drift");
-static_assert(sizeof(struct zsu_role_datum) == 40, "zsu: role_datum drift");
-static_assert(sizeof(struct zsu_user_datum) == 96, "zsu: user_datum drift");
-static_assert(sizeof(struct zsu_common_datum) == 32, "zsu: common_datum drift");
-static_assert(sizeof(struct zsu_class_datum) == 72, "zsu: class_datum drift");
+static_assert(sizeof(struct ebitmap) == 16, "zsu: ebitmap layout drift");
+static_assert(sizeof(struct hashtab) == 16, "zsu: hashtab layout drift");
+static_assert(sizeof(struct symtab) == 24, "zsu: symtab layout drift");
+static_assert(sizeof(struct type_datum) == 12, "zsu: type_datum drift");
+static_assert(sizeof(struct avtab) == 24, "zsu: avtab layout drift");
+static_assert(sizeof(struct mls_level) == 24, "zsu: mls_level drift");
+static_assert(sizeof(struct mls_range) == 48, "zsu: mls_range drift");
+static_assert(sizeof(struct role_datum) == 40, "zsu: role_datum drift");
+static_assert(sizeof(struct user_datum) == 96, "zsu: user_datum drift");
+static_assert(sizeof(struct common_datum) == 32, "zsu: common_datum drift");
+static_assert(sizeof(struct class_datum) == 72, "zsu: class_datum drift");
 static_assert(sizeof(struct zsu_cred_sec) == 24, "zsu: cred_sec drift");
 static_assert(offsetof(struct zsu_cred_sec, osid) == 0, "zsu: osid @0");
 static_assert(offsetof(struct zsu_cred_sec, sid) == 4, "zsu: sid @4");
@@ -406,7 +422,7 @@ static_assert(offsetof(struct zsu_cred_sec, keycreate_sid) == 16,
 	      "zsu: keycreate_sid @16");
 static_assert(offsetof(struct zsu_cred_sec, sockcreate_sid) == 20,
 	      "zsu: sockcreate_sid @20");
-static_assert(offsetof(struct zsu_selinux_policy, policydb) == 8,
+static_assert(offsetof(struct selinux_policy, policydb) == 8,
 	      "zsu: selinux_policy layout drift");
 
 /*
@@ -418,50 +434,50 @@ static_assert(offsetof(struct zsu_selinux_policy, policydb) == 8,
  * then walked a garbage hashtab. These asserts make a dropped field a build
  * error. Values are LP64 (the only GKI word size).
  */
-static_assert(sizeof(struct zsu_policydb) == 576, "zsu: policydb size drift");
-static_assert(offsetof(struct zsu_policydb, symtab) == 16,
+static_assert(sizeof(struct policydb) == 576, "zsu: policydb size drift");
+static_assert(offsetof(struct policydb, symtab) == 16,
 	      "zsu: policydb.symtab drift (leading ints lost?)");
-static_assert(offsetof(struct zsu_policydb, sym_val_to_name) == 208,
+static_assert(offsetof(struct policydb, sym_val_to_name) == 208,
 	      "zsu: policydb.sym_val_to_name drift");
-static_assert(offsetof(struct zsu_policydb, class_val_to_struct) == 272,
+static_assert(offsetof(struct policydb, class_val_to_struct) == 272,
 	      "zsu: policydb.class_val_to_struct drift");
-static_assert(offsetof(struct zsu_policydb, role_val_to_struct) == 280,
+static_assert(offsetof(struct policydb, role_val_to_struct) == 280,
 	      "zsu: policydb.role_val_to_struct drift");
-static_assert(offsetof(struct zsu_policydb, user_val_to_struct) == 288,
+static_assert(offsetof(struct policydb, user_val_to_struct) == 288,
 	      "zsu: policydb.user_val_to_struct drift");
-static_assert(offsetof(struct zsu_policydb, type_val_to_struct) == 296,
+static_assert(offsetof(struct policydb, type_val_to_struct) == 296,
 	      "zsu: policydb.type_val_to_struct drift");
-static_assert(offsetof(struct zsu_policydb, te_avtab) == 304,
+static_assert(offsetof(struct policydb, te_avtab) == 304,
 	      "zsu: policydb.te_avtab drift");
-static_assert(offsetof(struct zsu_policydb, role_tr) == 328,
+static_assert(offsetof(struct policydb, role_tr) == 328,
 	      "zsu: policydb.role_tr drift");
-static_assert(offsetof(struct zsu_policydb, filename_trans_ttypes) == 344,
+static_assert(offsetof(struct policydb, filename_trans_ttypes) == 344,
 	      "zsu: policydb.filename_trans_ttypes drift");
-static_assert(offsetof(struct zsu_policydb, filename_trans) == 360,
+static_assert(offsetof(struct policydb, filename_trans) == 360,
 	      "zsu: policydb.filename_trans drift");
-static_assert(offsetof(struct zsu_policydb, compat_filename_trans_count) == 376,
+static_assert(offsetof(struct policydb, compat_filename_trans_count) == 376,
 	      "zsu: policydb.compat_filename_trans_count drift");
-static_assert(offsetof(struct zsu_policydb, bool_val_to_struct) == 384,
+static_assert(offsetof(struct policydb, bool_val_to_struct) == 384,
 	      "zsu: policydb.bool_val_to_struct drift");
-static_assert(offsetof(struct zsu_policydb, te_cond_avtab) == 392,
+static_assert(offsetof(struct policydb, te_cond_avtab) == 392,
 	      "zsu: policydb.te_cond_avtab drift");
-static_assert(offsetof(struct zsu_policydb, cond_list) == 416,
+static_assert(offsetof(struct policydb, cond_list) == 416,
 	      "zsu: policydb.cond_list drift");
-static_assert(offsetof(struct zsu_policydb, cond_list_len) == 424,
+static_assert(offsetof(struct policydb, cond_list_len) == 424,
 	      "zsu: policydb.cond_list_len drift");
-static_assert(offsetof(struct zsu_policydb, role_allow) == 432,
+static_assert(offsetof(struct policydb, role_allow) == 432,
 	      "zsu: policydb.role_allow drift");
-static_assert(offsetof(struct zsu_policydb, ocontexts) == 440,
+static_assert(offsetof(struct policydb, ocontexts) == 440,
 	      "zsu: policydb.ocontexts drift (OCON_NUM not 9?)");
-static_assert(offsetof(struct zsu_policydb, genfs) == 512,
+static_assert(offsetof(struct policydb, genfs) == 512,
 	      "zsu: policydb.genfs drift");
-static_assert(offsetof(struct zsu_policydb, range_tr) == 520,
+static_assert(offsetof(struct policydb, range_tr) == 520,
 	      "zsu: policydb.range_tr drift");
-static_assert(offsetof(struct zsu_policydb, type_attr_map_array) == 536,
+static_assert(offsetof(struct policydb, type_attr_map_array) == 536,
 	      "zsu: policydb.type_attr_map_array drift");
-static_assert(offsetof(struct zsu_policydb, policycaps) == 544,
+static_assert(offsetof(struct policydb, policycaps) == 544,
 	      "zsu: policydb.policycaps drift");
-static_assert(offsetof(struct zsu_policydb, permissive_map) == 560,
+static_assert(offsetof(struct policydb, permissive_map) == 560,
 	      "zsu: policydb.permissive_map drift");
 
 /* ========================================================================
@@ -473,24 +489,28 @@ static_assert(offsetof(struct zsu_policydb, permissive_map) == 560,
  * argument registers will not line up.
  * ======================================================================== */
 
-/* ebitmap_set_bit() changed its bit parameter from unsigned long to u32 in
- * 6.x. On a 64-bit target those are different argument widths, so the
- * prototype is version split rather than cast. */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 0, 0)
-extern int (*zsu_ebitmap_set_bit)(struct zsu_ebitmap *e, unsigned long bit,
+/* ebitmap_set_bit() changed its bit parameter from unsigned long to u32.
+ *
+ * Verified against every GKI branch header: 5.10, 5.15, 6.1 and 6.6 still
+ * take "unsigned long bit"; only 6.12 and 6.18 narrowed it to u32. This is a
+ * CFI-visible width, so the split has to be at 6.12, not 6.0.
+ *
+ * ebitmap_get_bit() is deliberately not resolved: the only caller
+ * (zsu_sepolicy_adopt()) just wants set-bit-if-absent, and ebitmap_set_bit()
+ * with value 1 is already idempotent. Skipping it also avoids its own drift
+ * (non-const < 6.1, const >= 6.1). */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
+extern int (*zsu_ebitmap_set_bit)(struct ebitmap *e, unsigned long bit,
 				   int value);
-extern int (*zsu_ebitmap_get_bit)(const struct zsu_ebitmap *e,
-				   unsigned long bit);
 #else
-extern int (*zsu_ebitmap_set_bit)(struct zsu_ebitmap *e, u32 bit, int value);
-extern int (*zsu_ebitmap_get_bit)(const struct zsu_ebitmap *e, u32 bit);
+extern int (*zsu_ebitmap_set_bit)(struct ebitmap *e, u32 bit, int value);
 #endif
-extern void (*zsu_ebitmap_destroy)(struct zsu_ebitmap *e);
-extern int (*zsu_symtab_insert)(struct zsu_symtab *s, char *name, void *datum);
-extern void *(*zsu_symtab_search)(struct zsu_symtab *s, const char *name);
+extern void (*zsu_ebitmap_destroy)(struct ebitmap *e);
+extern int (*zsu_symtab_insert)(struct symtab *s, char *name, void *datum);
+extern void *(*zsu_symtab_search)(struct symtab *s, const char *name);
 
 #if ZSU_SECCTX_TO_SID_TAKES_STATE
-extern int (*zsu_security_context_str_to_sid)(struct zsu_selinux_state *state,
+extern int (*zsu_security_context_str_to_sid)(struct selinux_state *state,
 					      const char *scontext, u32 *out_sid,
 					      gfp_t gfp);
 #else
@@ -499,7 +519,7 @@ extern int (*zsu_security_context_str_to_sid)(const char *scontext,
 #endif
 
 /* Address of the exported selinux_state global. */
-extern struct zsu_selinux_state *zsu_selinux_state;
+extern struct selinux_state *zsu_selinux_state;
 
 /* selinux.c: struct lsm_blob_sizes *, lbs_cred is its first member */
 extern int *zsu_selinux_blob_sizes;
@@ -549,10 +569,10 @@ extern void (*sym_seccomp_filter_release)(struct task_struct *tsk);
  * We cache the *slot* - the address of the pointer inside selinux_state -
  * not the value it happens to hold at that moment. Policies are replaced
  * under policy_mutex via rcu_replace_pointer(), so a cached
- * struct zsu_selinux_policy pointer would go stale after any selinuxfs
+ * struct selinux_policy pointer would go stale after any selinuxfs
  * policy reload; the slot address is what stays valid.
  */
-extern struct zsu_selinux_policy **zsu_policy_slot;
+extern struct selinux_policy **zsu_policy_slot;
 extern struct mutex *zsu_policy_mutex_cached;
 
 /*
@@ -569,7 +589,7 @@ extern struct mutex *zsu_policy_mutex_cached;
  * Accessors and the version-split helper
  * ======================================================================== */
 
-static inline struct zsu_selinux_state *zsu_state(void)
+static inline struct selinux_state *zsu_state(void)
 {
 	return zsu_selinux_state;
 }
@@ -591,13 +611,13 @@ static inline struct mutex *zsu_policy_mutex(void)
  * performs GFP_KERNEL allocations and sleeping is illegal inside an RCU
  * read-side critical section.
  */
-static inline struct zsu_selinux_policy *zsu_policy(void)
+static inline struct selinux_policy *zsu_policy(void)
 {
 	return rcu_dereference_protected(*zsu_policy_slot,
 					 lockdep_is_held(zsu_policy_mutex()));
 }
 
-static inline struct zsu_policydb *zsu_policydb(void)
+static inline struct policydb *zsu_policydb(void)
 {
 	return &zsu_policy()->policydb;
 }
@@ -608,7 +628,7 @@ static inline struct zsu_policydb *zsu_policydb(void)
  * thing that breaks; refuse to hand out a policydb rather than corrupt it.
  * Caller must hold policy_mutex.
  */
-static inline bool zsu_selinux_layout_check(const struct zsu_policydb *p)
+static inline bool zsu_selinux_layout_check(const struct policydb *p)
 {
 	u32 nprim, ncls, nrole;
 
@@ -647,15 +667,21 @@ static inline bool zsu_selinux_layout_check(const struct zsu_policydb *p)
 	 * the rest is declared against), and a name lookup cannot succeed on
 	 * garbage that merely happens to look like plausible counters.
 	 */
-	if (!zsu_symtab_search((struct zsu_symtab *)&p->p_types, "kernel"))
+	/*
+	 * @p is const here but symtab_search() takes a non-const
+	 * "struct symtab *" (kernel 5.10..6.18 alike), so the cast is
+	 * required and does not affect the CFI type, which comes from the
+	 * function pointer's own prototype.
+	 */
+	if (!zsu_symtab_search((struct symtab *)&p->p_types, "kernel"))
 		return false;
 
 	return true;
 }
 
-static inline struct zsu_policydb *zsu_selinux_layout_sane(void)
+static inline struct policydb *zsu_selinux_layout_sane(void)
 {
-	struct zsu_policydb *p;
+	struct policydb *p;
 
 	if (!zsu_policy_slot || !*zsu_policy_slot) {
 		pr_err("zerosu: SELinux layout never discovered\n");
