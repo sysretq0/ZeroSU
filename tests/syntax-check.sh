@@ -1,7 +1,7 @@
 #!/bin/sh
 # ZeroSU - tests/syntax-check.sh
 #
-# Three independent checks, none of which needs a kernel tree:
+# Six independent checks, none of which needs a kernel tree:
 #
 #   1. UAPI ABI      - compiles and runs tests/abi_layout.c against the real
 #                      uapi/zerosu.h. Every struct size and field offset is a
@@ -16,10 +16,19 @@
 #                      and exit-path wiring bugs, and the mirrored-ABI
 #                      static_assert sizes without building a kernel.
 #
-#   3. Userspace     - compiles every userspace/*.c with -fsyntax-only under
+#   3. Authorization - source-level guards for the kernel permission model
+#                      (hdr.flags is untrusted; enrollment is uid 0 only).
+#
+#   4. Userspace     - compiles every userspace/*.c with -fsyntax-only under
 #                      the same flags userspace/Makefile uses (-std=gnu11
 #                      -Wall -Wextra -Werror). It needs no Android libraries:
 #                      the daemon, stub and ctl are raw syscalls and libc.
+#
+#   5. EventLog      - runs the proc_monitor decoder against hand-built AOSP
+#                      payloads.
+#
+#   6. ctl auth      - asserts the ctl socket's mutating ops require the
+#                      SuperKey and the read-only ops do not.
 #
 # Note that (2) is a syntax/type check, not a build: it cannot catch a kernel
 # ABI mismatch. That is what zsu_selinux_layout_sane() and the
@@ -184,6 +193,39 @@ if "$CC" -O0 -std=gnu11 -Wall -Wextra -Werror -D_GNU_SOURCE \
 	:
 else
 	say "FAIL: EventLog decoder regression"
+	fail=1
+fi
+
+say ""
+say "=== 6. ctl socket authorization guard ==="
+#
+# DAC membership in the shell group must never stand in for the SuperKey.
+# ALLOW writes a persistent grant and REVOKE kills a cgroup, so both are at
+# least as sensitive as SHELL and must call superkey_ok(); the read-only ops
+# must not. The compiler cannot see that a switch arm is missing a check, so
+# the invariant is asserted on the source.
+if awk '
+function flush() {
+	if (op != "") {
+		need = (op == "ZSU_CTL_ALLOW" || op == "ZSU_CTL_REVOKE" ||
+			op == "ZSU_CTL_SHELL")
+		has = (body ~ /superkey_ok\(/)
+		if (need && !has)  { print "  FAIL: " op " has no superkey_ok()"; bad = 1 }
+		if (!need && has)  { print "  FAIL: " op " requires the key"; bad = 1 }
+	}
+	op = ""; body = ""
+}
+/^[[:space:]]*case ZSU_CTL_[A-Z_]*:/ {
+	flush()
+	op = $2; sub(/:$/, "", op)
+	next
+}
+/^[[:space:]]*default:/ { flush(); next }
+{ if (op != "") body = body $0 "\n" }
+END { flush(); exit bad }
+' "$ROOT/userspace/daemon/broker.c"; then
+	say "ok: ALLOW/REVOKE/SHELL keyed, reads open"
+else
 	fail=1
 fi
 

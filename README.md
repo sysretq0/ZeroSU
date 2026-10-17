@@ -333,7 +333,7 @@ Three binaries, no shared library, no build system beyond a Makefile:
 |---|---|
 | `userspace/daemon/` | `zerosud`: a strictly single-threaded epoll daemon (no threads, no `fork`, no `/proc` scans). ctl socket, `packages.list` cache, logdr spawn monitor, per-uid inotify doorbells, inline mount-namespace overlay + bind injection, and the only code that speaks the ioctl ABI. |
 | `userspace/su/zsu_stub.c` | the template `/system/bin/su`: parks two anonymous pipes on fixed descriptors, rings the daemon by opening its own binary, waits for the one-byte ack, then execs `/system/bin/sh`. |
-| `userspace/ctl/zsu_ctl.c` | the orchestrator: `patch`, `allow`, `revoke`, `list`, `status`, `ping`, `shell`. `patch` stamps the SuperKey into the daemon's ELF slot and prints it once. |
+| `userspace/ctl/zsu_ctl.c` | the orchestrator: `patch`, `allow`, `revoke`, `list`, `status`, `ping`, `shell`. `patch` stamps the SuperKey into the daemon's ELF slot and prints it once. Every op that mutates state (`allow`, `revoke`, `shell`) must prove that SuperKey over `ctl.sock`; `list`/`status`/`ping` are unauthenticated reads. |
 
 ```sh
 cd userspace && make      # builds zerosud, zsu_stub, zsu_ctl (-Wall -Wextra -Werror)

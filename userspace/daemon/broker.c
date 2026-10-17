@@ -6,7 +6,9 @@
  *
  *   1. the ctl.sock control server. zsu_ctl is the only client; the socket is
  *      0660 root:shell and labelled shell_data_file, so it is reachable by
- *      adb shell but not by untrusted apps.
+ *      adb shell but not by untrusted apps. DAC membership is not the
+ *      credential: every op that mutates state (ALLOW, REVOKE, SHELL) must
+ *      additionally prove the SuperKey, and PING/STATUS/LIST stay open reads.
  *
  *   2. the doorbell. When a granted app execs /system/bin/su, the stub inside
  *      it rings by opening its own binary; the inotify watch on the per-uid
@@ -165,6 +167,20 @@ static void reply_err(struct zsu_ctl_resp *r, int err, const char *msg)
 	snprintf(r->msg, sizeof(r->msg), "%s", msg);
 }
 
+/*
+ * The SuperKey is the only credential the socket honours: DAC membership in
+ * the shell group is reachable by anything running as uid 2000, so it must not
+ * substitute for the key. session_verify_plain() does the constant-time
+ * compare; a false verdict is always -EACCES at the caller.
+ */
+static bool superkey_ok(const uint8_t key[ZSU_PATCH_KEY_LEN])
+{
+	bool ok = false;
+
+	(void)session_verify_plain(key, &ok);
+	return ok;
+}
+
 static int resolve_target(const struct zsu_ctl_req *req, uid_t *uid)
 {
 	if (req->pkg[0])
@@ -278,6 +294,10 @@ int broker_handle(int cfd)
 		break;
 
 	case ZSU_CTL_ALLOW:
+		if (!superkey_ok(req.key)) {
+			reply_err(&resp, -EACCES, "allow: bad SuperKey");
+			break;
+		}
 		rc = resolve_target(&req, &uid);
 		if (rc) {
 			reply_err(&resp, rc, "cannot resolve package/uid");
@@ -297,6 +317,10 @@ int broker_handle(int cfd)
 		break;
 
 	case ZSU_CTL_REVOKE:
+		if (!superkey_ok(req.key)) {
+			reply_err(&resp, -EACCES, "revoke: bad SuperKey");
+			break;
+		}
 		rc = resolve_target(&req, &uid);
 		if (rc) {
 			reply_err(&resp, rc, "cannot resolve package/uid");
@@ -325,15 +349,9 @@ int broker_handle(int cfd)
 			reply_err(&resp, -EPERM, "shell: pid must be your own");
 			break;
 		}
-		{
-			bool ok = false;
-
-			/* The boolean is the verdict; the errno is only context. */
-			(void)session_verify_plain(req.key, &ok);
-			if (!ok) {
-				reply_err(&resp, -EACCES, "shell: bad SuperKey");
-				break;
-			}
+		if (!superkey_ok(req.key)) {
+			reply_err(&resp, -EACCES, "shell: bad SuperKey");
+			break;
 		}
 		{
 			char dir[64];

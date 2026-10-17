@@ -6,10 +6,12 @@
  *
  *   patch <zerosud> [hex]   offline: stamp the SuperKey into the daemon's ELF
  *                           slot and print the key once. No daemon, no kernel.
- *   allow <pkg|uid>         stage <uid>/upper/su, register the doorbell and
- *                           hot-inject anything already in that uid's cgroup.
- *   revoke <pkg|uid>        drop the grant and kill the uid's cgroup.
- *   list / status / ping    observe the daemon.
+ *   allow <pkg|uid> [hex]   prove the SuperKey; then stage <uid>/upper/su,
+ *                           register the doorbell and hot-inject anything
+ *                           already in that uid's cgroup.
+ *   revoke <pkg|uid> [hex]  prove the SuperKey; then drop the grant and kill
+ *                           the uid's cgroup.
+ *   list / status / ping    observe the daemon (no key needed).
  *   shell [hex]             prove the SuperKey, ask zerosud to ELEVATE_TASK
  *                           this very process, then exec /system/bin/sh.
  *
@@ -37,10 +39,13 @@ static void usage(void)
 {
 	fprintf(stderr,
 		"usage: zsu_ctl patch <zerosud_elf> [hex_key_128]\n"
-		"       zsu_ctl allow <package|uid>\n"
-		"       zsu_ctl revoke <package|uid>\n"
+		"       zsu_ctl allow <package|uid> [hex_key_128]\n"
+		"       zsu_ctl revoke <package|uid> [hex_key_128]\n"
 		"       zsu_ctl list | status | ping\n"
-		"       zsu_ctl shell [hex_key_128]\n");
+		"       zsu_ctl shell [hex_key_128]\n"
+		"\n"
+		"The SuperKey may also come from $ZSU_KEY, or from the slot in a\n"
+		"readable daemon binary named by $ZSU_ZEROSUD.\n");
 }
 
 /* ------------------------------------------------------------------ */
@@ -116,11 +121,22 @@ static int is_numeric(const char *s)
 	return 1;
 }
 
-static int do_allow_revoke(const char *arg, uint32_t op)
+static int load_superkey(const char *hexarg, uint8_t key[ZSU_PATCH_KEY_LEN],
+			 const char *what);
+
+static int do_allow_revoke(const char *arg, const char *hex, uint32_t op)
 {
+	uint8_t key[ZSU_PATCH_KEY_LEN];
 	struct zsu_ctl_req req;
 	struct zsu_ctl_resp resp;
+	const char *name = op == ZSU_CTL_ALLOW ? "allow" : "revoke";
 	int rc;
+
+	/* ALLOW writes a persistent grant and REVOKE kills a cgroup: both are
+	 * at least as sensitive as SHELL, so both require the SuperKey. */
+	rc = load_superkey(hex, key, name);
+	if (rc)
+		return rc;
 
 	memset(&req, 0, sizeof(req));
 	req.op = op;
@@ -128,15 +144,16 @@ static int do_allow_revoke(const char *arg, uint32_t op)
 		req.uid = (uint32_t)strtoul(arg, NULL, 10);
 	else
 		snprintf(req.pkg, sizeof(req.pkg), "%s", arg);
+	memcpy(req.key, key, sizeof(key));
+	zsu_wipe(key, sizeof(key));
 
 	rc = ctl_call(&req, &resp);
 	if (rc) {
-		fprintf(stderr, "zsu_ctl: %s: %s\n",
-			op == ZSU_CTL_ALLOW ? "allow" : "revoke", strerror(-rc));
+		fprintf(stderr, "zsu_ctl: %s: %s\n", name, strerror(-rc));
 		return 1;
 	}
 	if (resp.status) {
-		fprintf(stderr, "zsu_ctl: %s\n",
+		fprintf(stderr, "zsu_ctl: %s: %s\n", name,
 			resp.msg[0] ? resp.msg : strerror(-resp.status));
 		return 1;
 	}
@@ -228,45 +245,63 @@ static int key_from_elf(const char *path, uint8_t key[ZSU_PATCH_KEY_LEN])
 	return -ENOKEY;
 }
 
-static int do_shell(int argc, char **argv)
+/*
+ * Resolve the SuperKey, in precedence order: an explicit hex argument, the
+ * ZSU_KEY environment variable, or the slot inside a readable daemon binary
+ * named by ZSU_ZEROSUD. The hex argument is optional; NULL means "fall back to
+ * the environment". Returns 0 on success, 2 for a usage/key-format error, and
+ * 1 for an I/O error.
+ */
+static int load_superkey(const char *hexarg, uint8_t key[ZSU_PATCH_KEY_LEN],
+			 const char *what)
 {
-	uint8_t key[ZSU_PATCH_KEY_LEN];
-	struct zsu_ctl_req req;
-	struct zsu_ctl_resp resp;
-	const char *envkey, *elfpath;
-	uint64_t start;
+	const char *envkey = getenv("ZSU_KEY");
+	const char *elfpath = getenv("ZSU_ZEROSUD");
 	int rc;
 
-	/* Read the environment once: precedence is arg, ZSU_KEY, ZSU_ZEROSUD. */
-	envkey = getenv("ZSU_KEY");
-	elfpath = getenv("ZSU_ZEROSUD");
-
-	if (argc > 0) {
-		if (zsu_hex_decode(argv[0], key, ZSU_PATCH_KEY_LEN)) {
+	if (hexarg) {
+		if (zsu_hex_decode(hexarg, key, ZSU_PATCH_KEY_LEN)) {
 			fprintf(stderr, "zsu_ctl: key must be %d hex chars\n",
 				ZSU_PATCH_KEY_LEN * 2);
 			return 2;
 		}
-	} else if (envkey) {
+		return 0;
+	}
+	if (envkey) {
 		if (zsu_hex_decode(envkey, key, ZSU_PATCH_KEY_LEN)) {
 			fprintf(stderr, "zsu_ctl: ZSU_KEY must be %d hex chars\n",
 				ZSU_PATCH_KEY_LEN * 2);
 			return 2;
 		}
-	} else if (elfpath) {
+		return 0;
+	}
+	if (elfpath) {
 		rc = key_from_elf(elfpath, key);
 		if (rc) {
-			fprintf(stderr,
-				"zsu_ctl: cannot read key from %s: %s\n",
+			fprintf(stderr, "zsu_ctl: cannot read key from %s: %s\n",
 				elfpath, strerror(-rc));
 			return 1;
 		}
-	} else {
-		fprintf(stderr,
-			"zsu_ctl: shell needs the SuperKey (argument or ZSU_KEY),"
-			" or ZSU_ZEROSUD with a readable binary\n");
-		return 2;
+		return 0;
 	}
+
+	fprintf(stderr,
+		"zsu_ctl: %s needs the SuperKey (argument or ZSU_KEY),"
+		" or ZSU_ZEROSUD with a readable binary\n", what);
+	return 2;
+}
+
+static int do_shell(int argc, char **argv)
+{
+	uint8_t key[ZSU_PATCH_KEY_LEN];
+	struct zsu_ctl_req req;
+	struct zsu_ctl_resp resp;
+	uint64_t start;
+	int rc;
+
+	rc = load_superkey(argc > 0 ? argv[0] : NULL, key, "shell");
+	if (rc)
+		return rc;
 
 	if (zsu_proc_start_time_path("/proc/self", &start)) {
 		fprintf(stderr, "zsu_ctl: cannot read own start time\n");
@@ -449,9 +484,13 @@ int main(int argc, char **argv)
 		return do_patch(argv[2], argc > 3 ? argv[3] : NULL);
 	}
 	if (!strcmp(cmd, "allow"))
-		return argc == 3 ? do_allow_revoke(argv[2], ZSU_CTL_ALLOW) : 2;
+		return argc >= 3 ?
+			do_allow_revoke(argv[2], argc > 3 ? argv[3] : NULL,
+					ZSU_CTL_ALLOW) : 2;
 	if (!strcmp(cmd, "revoke"))
-		return argc == 3 ? do_allow_revoke(argv[2], ZSU_CTL_REVOKE) : 2;
+		return argc >= 3 ?
+			do_allow_revoke(argv[2], argc > 3 ? argv[3] : NULL,
+					ZSU_CTL_REVOKE) : 2;
 	if (!strcmp(cmd, "list"))
 		return do_simple(ZSU_CTL_LIST);
 	if (!strcmp(cmd, "status"))
