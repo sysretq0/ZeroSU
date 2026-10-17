@@ -31,6 +31,9 @@ typedef unsigned int kgid_t;
 #define make_kgid(_ns, _v) ((kgid_t)(_v))
 #define make_kuid(_ns, _v) ((kuid_t)(_v))
 #define GLOBAL_ROOT_UID ((kuid_t)0)
+/* Real headers wrap these in kuid_t/kgid_t structs; the stub is already scalar. */
+#define __kuid_val(_v) ((unsigned int)(_v))
+#define __kgid_val(_v) ((unsigned int)(_v))
 #define uid_eq(_a, _b) ((_a) == (_b))
 static inline kuid_t current_uid(void) { return 0; }
 #define sort(_a, _n, _s, _c, _x) do { (void)(_a); (void)(_n); } while (0)
@@ -113,7 +116,7 @@ static inline int lockdep_is_held(struct mutex *m) { (void)m; return 1; }
 static inline void *kzalloc(size_t n, gfp_t f) { (void)n; (void)f; return NULL; }
 static inline void *kmalloc(size_t n, gfp_t f) { (void)n; (void)f; return NULL; }
 #define GFP_ATOMIC 0u
-static inline void *kvcalloc_array(size_t n, size_t s, gfp_t f)
+static inline void *kvcalloc(size_t n, size_t s, gfp_t f)
 { (void)n; (void)s; (void)f; return NULL; }
 static inline void kvfree(const void *p) { (void)p; }
 static inline void kfree(const void *p) { (void)p; }
@@ -161,6 +164,7 @@ static inline void unregister_kprobe(struct kprobe *kp) { (void)kp; }
 #define ENOTSUP 95
 #define __exit
 #define __init
+#define __refdata
 #define ESRCH 3
 #define EPERM_ 0
 #define OPTIMIZER_HIDE_VAR(_x) do { } while (0)
@@ -217,7 +221,10 @@ struct user_struct;
 struct pid;
 struct zsu_cap_t { unsigned long low, high; };
 struct seccomp_filter;
-struct group_info;
+struct group_info {
+	int ngroups;
+	kgid_t gid[0];
+};
 struct cred {
 	void *security;
 	void *user, *user_ns;
@@ -239,10 +246,8 @@ static inline struct cred *get_cred(struct cred *c) { return c; }
 static inline void put_cred(struct cred *c) { (void)c; }
 static inline void put_group_info(struct group_info *gi) { (void)gi; }
 static inline struct group_info *groups_alloc(int n) { (void)n; return NULL; }
-static inline int set_groups(struct cred *c, struct group_info *gi)
-{ (void)c; (void)gi; return 0; }
-static inline int cmp_kgid(const void *a, const void *b)
-{ (void)a; (void)b; return 0; }
+static inline void set_groups(struct cred *c, struct group_info *gi)
+{ (void)c; (void)gi; }
 static inline struct task_struct *get_task_struct(struct task_struct *t)
 { return t; }
 static inline void put_task_struct(struct task_struct *t) { (void)t; }
@@ -293,10 +298,12 @@ struct file_operations {
 	loff_t (*llseek)(struct file *, loff_t, int);
 };
 struct mm_struct;
-struct task_work {
-	void (*func)(struct task_work *work);
+struct callback_head {
+	struct callback_head *next;
+	void (*func)(struct callback_head *head);
 };
-enum task_work_notify { TWA_NONE, TWA_RESUME, TWA_NOWAIT };
+typedef void (*task_work_func_t)(struct callback_head *);
+enum task_work_notify_mode { TWA_NONE, TWA_RESUME, TWA_SIGNAL };
 struct wait_queue_head { int lock; int head; };
 typedef struct wait_queue_head wait_queue_head_t;
 struct user_namespace;

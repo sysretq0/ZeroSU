@@ -28,7 +28,6 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/sched/user.h>
-#include <linux/sort.h>
 #include <linux/uidgid.h>
 
 #include "include/zerosu.h"
@@ -51,6 +50,17 @@ MODULE_PARM_DESC(keep_no_new_privs,
  * is declared in <linux/sched/user.h>, so it is called directly below - no
  * lookup, and the compiler and kCFI check the call.
  */
+/*
+ * Storage for the resolved-symbol slots declared extern in compat.h. The
+ * definitions sit next to the table that fills them.
+ */
+__typeof__(sym_prepare_creds) sym_prepare_creds;
+__typeof__(sym_commit_creds) sym_commit_creds;
+__typeof__(sym_alloc_uid) sym_alloc_uid;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 0)
+__typeof__(sym_set_cred_ucounts) sym_set_cred_ucounts;
+#endif
+
 static struct zsu_symtab_ent elevate_syms[] = {
 	{ "prepare_creds",	(void **)&sym_prepare_creds,	true },
 	{ "commit_creds",	(void **)&sym_commit_creds,	true },
@@ -71,26 +81,23 @@ int zsu_elevate_syms_init(void)
  *
  * set_groups() takes its own reference on @gi, which is why the matching
  * put_group_info() is mandatory - omit it and every elevation leaks a
- * group_info. The array is sorted because in_group_p() binary searches it; an
- * unsorted array makes membership a coin flip.
+ * group_info. in_group_p() binary searches the group list, so it must be
+ * sorted; with a single supplementary group there is nothing to reorder.
  */
 static int zsu_setup_groups(struct cred *new_cred)
 {
 	struct group_info *gi;
-	kgid_t groups[1];
-	int rc;
-
-	groups[0] = make_kgid(new_cred->user_ns, ZSU_TARGET_GID);
-	sort(groups, 1, sizeof(groups[0]), cmp_kgid, NULL);
 
 	gi = groups_alloc(1);
 	if (!gi)
 		return -ENOMEM;
 
-	rc = set_groups(new_cred, gi);
+	gi->gid[0] = make_kgid(new_cred->user_ns, ZSU_TARGET_GID);
+
+	set_groups(new_cred, gi);
 	put_group_info(gi);	/* set_groups() took its own reference */
 
-	return rc;
+	return 0;
 }
 
 /*

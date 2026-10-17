@@ -67,7 +67,7 @@
  * recovers the wrapper with container_of().
  */
 struct zsu_tw {
-	struct task_work cb;
+	struct callback_head cb;
 	void __user *out_fd;
 	u32 mode;			/* ZSU_SESSION_PLAIN | ZSU_SESSION_SU */
 };
@@ -82,8 +82,9 @@ static struct kprobe reboot_kp;
 
 /* task_work_add() is internal on 5.10/6.1 and EXPORT_SYMBOL_GPL by 6.18;
  * a lookup behaves the same either way, so it stays on the resolve path. */
-static int (*sym_task_work_add)(struct task_struct *task, struct task_work *work,
-				enum task_work_notify notify);
+static int (*sym_task_work_add)(struct task_struct *task,
+				struct callback_head *work,
+				enum task_work_notify_mode notify);
 
 static struct zsu_symtab_ent gateway_syms[] = {
 	{ "task_work_add", (void **)&sym_task_work_add, true },
@@ -108,7 +109,7 @@ int zsu_gateway_syms_init(void)
  *     the module can never be told "drained" while its own text is still
  *     running.
  */
-static void zerosu_install_work(struct task_work *work)
+static void zerosu_install_work(struct callback_head *work)
 {
 	struct zsu_tw *tw = container_of(work, struct zsu_tw, cb);
 	struct zsu_session *ctx;

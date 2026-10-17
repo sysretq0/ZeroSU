@@ -41,6 +41,12 @@ static u32 zsu_cached_sid __ro_after_init;
  * This subsystem's symbols. security_context_str_to_sid moved here from
  * sepolicy.c: it is a cred/SID concern, not a policydb mutation concern.
  */
+/*
+ * Storage for the resolved-symbol slots declared extern in compat.h.
+ */
+__typeof__(zsu_selinux_blob_sizes) zsu_selinux_blob_sizes;
+__typeof__(zsu_security_context_str_to_sid) zsu_security_context_str_to_sid;
+
 static struct zsu_symtab_ent selinux_syms[] = {
 	{ "selinux_blob_sizes",		(void **)&zsu_selinux_blob_sizes,	true },
 	{ "security_context_str_to_sid",	(void **)&zsu_security_context_str_to_sid, true },

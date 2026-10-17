@@ -28,6 +28,12 @@
 
 #include "include/zerosu.h"
 
+/*
+ * Storage for the resolved-symbol slot that compat.h declares extern. The
+ * definition lives next to the table that fills it in.
+ */
+__typeof__(sym_seccomp_filter_release) sym_seccomp_filter_release;
+
 static struct zsu_symtab_ent seccomp_syms[] = {
 	{ "seccomp_filter_release",	(void **)&sym_seccomp_filter_release, true },
 };

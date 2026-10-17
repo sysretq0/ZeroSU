@@ -24,6 +24,14 @@
 #if defined(CONFIG_ARM64)
 #define ZSU_ARCH_NAME		"arm64"
 #define ZSU_REBOOT_SYMBOL	"__arm64_sys_reboot"
+/*
+ * PT_REGS_PARM1 comes from <linux/kprobes.h> on some trees and
+ * <asm/ptrace.h> on others; the MediaTek 5.10 vendor tree defines neither, so
+ * fall back to reading the arch's first argument register directly.
+ */
+#ifndef PT_REGS_PARM1
+#define PT_REGS_PARM1(_r)	((_r)->regs[0])
+#endif
 #define ZSU_SYS_PT_REGS(_kp)	((struct pt_regs *)PT_REGS_PARM1(_kp))
 #define ZSU_SYS_PARAM1(_r)	((unsigned long)(_r)->regs[0])
 #define ZSU_SYS_PARAM2(_r)	((unsigned long)(_r)->regs[1])
@@ -40,6 +48,9 @@
  * argument arrives in rcx (there is no swap to r11, so r10 stays in rcx),
  * hence cx rather than a "r10" field that pt_regs does not have.
  */
+#ifndef PT_REGS_PARM1
+#define PT_REGS_PARM1(_r)	((_r)->di)
+#endif
 #define ZSU_SYS_PT_REGS(_kp)	((struct pt_regs *)PT_REGS_PARM1(_kp))
 #define ZSU_SYS_PARAM1(_r)	((unsigned long)(_r)->di)
 #define ZSU_SYS_PARAM2(_r)	((unsigned long)(_r)->si)
@@ -51,6 +62,9 @@
 #elif defined(CONFIG_RISCV)
 #define ZSU_ARCH_NAME		"riscv64"
 #define ZSU_REBOOT_SYMBOL	"__riscv_sys_reboot"
+#ifndef PT_REGS_PARM1
+#define PT_REGS_PARM1(_r)	((_r)->a0)
+#endif
 #define ZSU_SYS_PT_REGS(_kp)	((struct pt_regs *)PT_REGS_PARM1(_kp))
 #define ZSU_SYS_PARAM1(_r)	((unsigned long)(_r)->a0)
 #define ZSU_SYS_PARAM2(_r)	((unsigned long)(_r)->a1)

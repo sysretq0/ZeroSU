@@ -37,6 +37,15 @@
 #include <linux/version.h>
 
 /*
+ * Without CONFIG_LOCKDEP the tree defines lockdep_is_held_type() but not
+ * lockdep_is_held(). The check below is a sanity assertion on a mutex we hold,
+ * so on a non-lockdep kernel it is vacuously true.
+ */
+#ifndef lockdep_is_held
+#define lockdep_is_held(lock)	({ (void)(lock); 1; })
+#endif
+
+/*
  * The mirrored structs below are only valid because every Android GKI
  * gki_defconfig from 5.10 through 6.18 leaves CONFIG_RANDSTRUCT* off. All of
  * struct selinux_state, struct selinux_policy and struct policydb carry

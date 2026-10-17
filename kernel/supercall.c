@@ -26,8 +26,8 @@
  *      -Werror=vla. The descriptor is preallocated once, under a mutex.
  */
 
+#include <crypto/hash.h>
 #include <linux/atomic.h>
-#include <linux/crypto.h>
 #include <linux/errno.h>
 #include <linux/fs.h>
 #include <linux/module.h>
@@ -502,13 +502,13 @@ long zerosu_supercall_ioctl(struct file *file, unsigned int cmd,
 	}
 	case ZSU_CMD_GET_PROFILE: {
 		struct zerosu_profile prof;
-		struct cred *cred = current_cred();
+		const struct cred *cred = current_cred();
 
 		memset(&prof, 0, sizeof(prof));
 		prof.caps = ZSU_CAP_INFO | ZSU_CAP_KEY_ENROLL;
 		if (cred) {
-			prof.uid = cred->uid;
-			prof.gid = cred->gid;
+			prof.uid = __kuid_val(cred->uid);
+			prof.gid = __kgid_val(cred->gid);
 		}
 
 		if (copy_to_user(payload, &prof, sizeof(prof)))
@@ -616,7 +616,6 @@ out_perm:
 	if (ret)
 		ctx->last_error = (s32)ret;
 
-out_unlock:
 	if (hdr.opcode == ZSU_CMD_NEXT_EVENT ||
 	    hdr.opcode == ZSU_CMD_GET_STATUS)
 		mutex_unlock(&ctx->event_lock);
@@ -655,7 +654,6 @@ int zerosu_supercall_init(void)
 		return -ENOMEM;
 	}
 	sha256_desc->tfm = sha256_tfm;
-	sha256_desc->flags = 0;
 
 	mutex_init(&key_lock);
 	mutex_init(&sha_lock);
@@ -663,7 +661,7 @@ int zerosu_supercall_init(void)
 	memset(key_digest, 0, sizeof(key_digest));
 
 	pr_info(ZSU_LOG_PREFIX "supercall ready, sha256 descsize %zu\n",
-		crypto_shash_descsize(sha256_tfm));
+		(size_t)crypto_shash_descsize(sha256_tfm));
 	return 0;
 }
 

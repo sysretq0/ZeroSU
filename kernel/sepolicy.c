@@ -117,7 +117,7 @@ static void *zsu_grow_array(const void *old, size_t old_elems, size_t elemsize)
 {
 	void *neu;
 
-	neu = kvcalloc_array(old_elems + 1, elemsize, GFP_KERNEL);
+	neu = kvcalloc(old_elems + 1, elemsize, GFP_KERNEL);
 	if (!neu)
 		return NULL;
 	if (old)
@@ -151,6 +151,17 @@ static int zsu_sepolicy_adopt(struct zsu_policydb *p, u32 val)
  * (unsigned long vs u32 bit index); the table stores void * so it does not
  * have to care, and the prototypes still get checked at the call sites.
  */
+/*
+ * Storage for the resolved-symbol slots declared extern in compat.h. The
+ * definitions sit next to the table that fills them.
+ */
+__typeof__(zsu_selinux_state) zsu_selinux_state;
+__typeof__(zsu_ebitmap_set_bit) zsu_ebitmap_set_bit;
+__typeof__(zsu_ebitmap_get_bit) zsu_ebitmap_get_bit;
+__typeof__(zsu_ebitmap_destroy) zsu_ebitmap_destroy;
+__typeof__(zsu_symtab_insert) zsu_symtab_insert;
+__typeof__(zsu_symtab_search) zsu_symtab_search;
+
 static struct zsu_symtab_ent sepolicy_syms[] = {
 	{ "selinux_state",			(void **)&zsu_selinux_state,		true },
 	{ "ebitmap_set_bit",			(void **)&zsu_ebitmap_set_bit,		true },

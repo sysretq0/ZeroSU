@@ -128,8 +128,38 @@ static void __exit zerosu_exit(void)
 module_init(zerosu_init);
 module_exit(zerosu_exit);
 
+/*
+ * CFI shim, gcc path only.
+ *
+ * The device kernel is built with CONFIG_CFI_CLANG. When this module is built
+ * by the KernelSU-style workflow (the DDK kdir, clang, CONFIG_CFI_CLANG is
+ * set), clang emits "__cfi_check" itself and the kernel's module_init()/
+ * module_exit() macros generate the "__cfi_jt_*" jump-table slots via
+ * __CFI_ADDRESSABLE(), so the shim below must not be compiled or it would be
+ * a duplicate symbol.
+ *
+ * When the module is instead built with plain gcc (CONFIG_CFI_CLANG is not
+ * set in that kdir), none of that is emitted. cfi_init() on the device still
+ * looks up a module-supplied "__cfi_check" in the module's own kallsyms and
+ * adopts it as the module's check function, and pins mod->init/mod->exit from
+ * the "__cfi_jt_init_module"/"__cfi_jt_cleanup_module" jump-table slots. The
+ * no-op check accepts every indirect call into the module; the kernel only
+ * uses its return value to decide whether to panic.
+ */
+#ifndef CONFIG_CFI_CLANG
+void __cfi_check(u64 id, void *ptr, void *diag)
+{
+	(void)id;
+	(void)ptr;
+	(void)diag;
+}
+
+void *__refdata __cfi_jt_init_module = (void *)zerosu_init;
+void *__refdata __cfi_jt_cleanup_module = (void *)zerosu_exit;
+#endif /* !CONFIG_CFI_CLANG */
+
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("ZeroSU");
 MODULE_DESCRIPTION("ZeroSU: reboot-gateway based root session module");
 MODULE_VERSION(ZSU_VERSION);
-MODULE_INFO(abi, ZSU_ABI_VERSION);
+MODULE_INFO(abi, __stringify(ZSU_ABI_VERSION));
