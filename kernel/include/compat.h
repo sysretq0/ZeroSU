@@ -110,6 +110,17 @@
 #define ZSU_COMPAT_IOCTL_HANDLER	NULL
 #endif
 
+/*
+ * no_llseek() was removed in 6.12. noop_llseek() exists on every branch and is
+ * what the VFS wants for a file whose offset is never meaningful, so the
+ * choice lives here instead of in gateway.c.
+ */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
+#define ZSU_NO_LLSEEK	no_llseek
+#else
+#define ZSU_NO_LLSEEK	noop_llseek
+#endif
+
 /* ========================================================================
  * Mirrored SELinux ABI
  *

@@ -313,6 +313,9 @@ static inline void wake_up(struct wait_queue_head *wq) { (void)wq; }
 #define wait_event(_wq, _cond) do { (void)(_wq); } while (0)
 static inline loff_t no_llseek(struct file *f, loff_t o, int w)
 { (void)f; (void)o; (void)w; return 0; }
+/* no_llseek was removed in 6.12; the portability shim uses noop_llseek there. */
+static inline loff_t noop_llseek(struct file *f, loff_t o, int w)
+{ (void)f; (void)o; (void)w; return 0; }
 static inline long get_unused_fd_flags(unsigned int f) { (void)f; return -1; }
 static inline void put_unused_fd(unsigned int fd) { (void)fd; }
 static inline void fd_install(unsigned int fd, struct file *f) { (void)fd; (void)f; }

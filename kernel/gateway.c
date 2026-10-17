@@ -250,7 +250,7 @@ const struct file_operations zerosu_session_fops = {
 	.unlocked_ioctl		= zerosu_supercall_ioctl,
 	.compat_ioctl		= ZSU_COMPAT_IOCTL_HANDLER,
 	.release		= zerosu_session_release,
-	.llseek			= no_llseek,
+	.llseek			= ZSU_NO_LLSEEK,
 };
 
 int zerosu_session_release(struct inode *inode, struct file *file)

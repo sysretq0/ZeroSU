@@ -27,3 +27,9 @@ zerosu-y := \
 # The module is a GPL one: it calls EXPORT_SYMBOL_GPL entry points such as
 # free_uid() and the crypto shash helpers.
 ccflags-y += -Wall
+
+# Some KMI turns the kernel's own CONFIG_WERROR on, and a handful of kernel
+# headers then trip the DDK compiler's warnings (e.g. mmzone.h's
+# -Wunused-but-set-variable on android13-5.10). Those warnings are not this
+# module's code; keep them visible but do not let them fail the build.
+ccflags-y += -Wno-error
