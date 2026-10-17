@@ -86,10 +86,13 @@ static int load_key(uint8_t key[ZSU_PATCH_KEY_LEN])
 {
 	int i, nonzero = 0;
 
-	if (memcmp(zsu_boot_slot.magic, ZSU_PATCH_MAGIC, ZSU_PATCH_MAGIC_LEN)) {
-		zsu_warn("patch slot magic missing from this binary");
-		return -EINVAL;
-	}
+	/*
+	 * Deliberately no memcmp() against ZSU_PATCH_MAGIC here: referencing it
+	 * as a string literal emits a second copy of "ZSUKEY00" into .rodata,
+	 * and zsu_ctl requires the slot to be the file's *only* occurrence. The
+	 * magic's job is offline (it anchors the patch site); at runtime the
+	 * only invalid state is an all-zero key, which the loop below catches.
+	 */
 	for (i = 0; i < ZSU_PATCH_KEY_LEN; i++)
 		nonzero += zsu_boot_slot.key[i] != 0;
 

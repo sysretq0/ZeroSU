@@ -76,13 +76,15 @@ void zsu_die(const char *fmt, ...)
 }
 
 /*
- * explicit_bzero() semantics, with a fallback for libcs that lack it. The
- * volatile pointer is what stops the compiler from proving the store dead;
- * AUTH_SET_KEY and the key slot both go through here.
+ * explicit_bzero() semantics, with a fallback for libcs that lack it. glibc
+ * and the BSDs provide it; bionic does not (it has __bionic_bzero, which the
+ * compiler may still elide), so Android takes the volatile path. The volatile
+ * pointer is what stops the compiler from proving the store dead; AUTH_SET_KEY
+ * and the key slot both go through here.
  */
 void zsu_wipe(void *p, size_t n)
 {
-#if defined(__GLIBC__) || defined(__BIONIC__)
+#if defined(__GLIBC__)
 	explicit_bzero(p, n);
 #else
 	volatile unsigned char *v = (volatile unsigned char *)p;

@@ -30,6 +30,9 @@
 #   6. ctl auth      - asserts the ctl socket's mutating ops require the
 #                      SuperKey and the read-only ops do not.
 #
+#   7. key slot      - links the daemon and asserts the ZSUKEY00 magic appears
+#                      exactly once, the invariant zsu_ctl patch depends on.
+#
 # Note that (2) is a syntax/type check, not a build: it cannot catch a kernel
 # ABI mismatch. That is what zsu_selinux_layout_sane() and the
 # zsu_selinux_discover() probe are for at runtime.
@@ -226,6 +229,32 @@ END { flush(); exit bad }
 ' "$ROOT/userspace/daemon/broker.c"; then
 	say "ok: ALLOW/REVOKE/SHELL keyed, reads open"
 else
+	fail=1
+fi
+
+say ""
+say "=== 7. key slot uniqueness ==="
+#
+# zsu_ctl patch refuses a binary that contains the ZSUKEY00 magic more than
+# once. Referencing ZSU_PATCH_MAGIC as a string literal in the daemon emits a
+# second copy into .rodata, which silently made every release binary
+# unpatchable (caught only by running patch on a real device). Assert the
+# linked binary carries exactly one slot.
+if "$CC" -O2 -std=gnu11 -Wall -Wextra -Werror -D_GNU_SOURCE \
+	-I "$ROOT/userspace/include" \
+	-I "$ROOT/kernel/include" \
+	-I "$ROOT/userspace/daemon" \
+	-o "$TMP/zerosud" "$ROOT"/userspace/daemon/*.c 2>"$TMP/zsu-link-err"; then
+	n=$(grep -ao "ZSUKEY00" "$TMP/zerosud" | wc -l)
+	if [ "$n" -eq 1 ]; then
+		say "ok: exactly one key slot"
+	else
+		say "FAIL: $n ZSUKEY00 occurrences (patch requires exactly 1)"
+		fail=1
+	fi
+else
+	say "FAIL: daemon link"
+	head -20 "$TMP/zsu-link-err"
 	fail=1
 fi
 
