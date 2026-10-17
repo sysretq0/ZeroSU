@@ -12,6 +12,7 @@
 typedef uint32_t u32;
 typedef uint16_t u16;
 typedef uint8_t  u8;
+typedef int pid_t;
 typedef unsigned int gfp_t;
 typedef unsigned char __u8;
 typedef unsigned short __u16;
@@ -169,6 +170,7 @@ struct seccomp { int mode; int filter_count; struct seccomp_filter *filter; };
 struct sighand_struct { int siglock; };
 struct task_struct {
 	unsigned long flags;
+	u64 start_boottime;		/* nsec_to_clock_t()'d for stat field 22 */
 	struct mm_struct *mm;
 	struct sighand_struct *sighand;
 	struct seccomp seccomp;
@@ -181,6 +183,8 @@ struct signal_struct { int live; };
 #define task_lock(_t)		do { } while (0)
 #define task_unlock(_t)		do { } while (0)
 #define rcu_assign_pointer(_p, _v) do { (_p) = (typeof(_p))(_v); } while (0)
+/* include/linux/jiffies.h: same transform fs/proc/array.c uses for field 22 */
+static inline u64 nsec_to_clock_t(u64 x) { return x; }
 #define TIF_SECCOMP	0
 #define PF_EXITING	0x00000004
 #define CAP_FULL_SET zsu_cap_full

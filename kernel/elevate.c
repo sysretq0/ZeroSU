@@ -22,6 +22,7 @@
 #include <linux/capability.h>
 #include <linux/cred.h>
 #include <linux/errno.h>
+#include <linux/jiffies.h>
 #include <linux/module.h>
 #include <linux/pid.h>
 #include <linux/sched.h>
@@ -276,7 +277,7 @@ int zerosu_elevate(u32 mode)
 	return do_elevate(current, mode);
 }
 
-int zerosu_elevate_task(u32 pid_nr, u32 mode)
+int zerosu_elevate_task(pid_t pid_nr, u32 mode, u64 start_time)
 {
 	struct task_struct *tsk;
 	struct pid *kpid;
@@ -285,6 +286,19 @@ int zerosu_elevate_task(u32 pid_nr, u32 mode)
 	if (mode != ZSU_ELEVATE_MODE_TASK)
 		return -EINVAL;
 	if (!pid_nr)
+		return -EINVAL;
+
+	/*
+	 * start_time == 0 is refused rather than treated as "don't care".
+	 *
+	 * A zero token is what a caller that has not thought about identity
+	 * would send, and it is exactly the value that would turn a reused pid
+	 * into a free elevation. Failing closed here means the only way to
+	 * reach ELEVATE_TASK is to have read field 22 out of the target's
+	 * /proc/<pid>/stat, which the daemon does with the target's own /proc
+	 * directory pinned.
+	 */
+	if (!start_time)
 		return -EINVAL;
 
 	/*
@@ -302,6 +316,18 @@ int zerosu_elevate_task(u32 pid_nr, u32 mode)
 	put_pid(kpid);
 	if (!tsk)
 		return -ESRCH;
+
+	/*
+	 * Identity check. nsec_to_clock_t() is the same transform
+	 * fs/proc/array.c uses to render stat field 22, so a userspace token
+	 * read from procfs compares equal here for exactly one task lifetime.
+	 * A recycled pid fails this and the whole call fails -ESRCH; there is
+	 * no retry, no fallback and no lock held across the comparison.
+	 */
+	if ((u64)nsec_to_clock_t(tsk->start_boottime) != start_time) {
+		put_task_struct(tsk);
+		return -ESRCH;
+	}
 
 	rc = do_elevate(tsk, mode);
 

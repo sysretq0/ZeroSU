@@ -32,6 +32,18 @@ _Static_assert(sizeof(struct zerosu_cmd) % 8 == 0, "zerosu_cmd must be 8-aligned
 _Static_assert(_Alignof(struct zerosu_cmd) >= 4, "natural alignment");
 
 /*
+ * The ELEVATE_TASK payload: one __u64 start-time token. _Alignof is asserted
+ * as >= 4 rather than == 8 so a 32 bit (-m32) build, where a 64 bit scalar is
+ * only 4 byte aligned, still passes; what actually has to hold everywhere is
+ * that the field is at offset 0 and the struct is exactly the payload size.
+ */
+_Static_assert(sizeof(struct zerosu_elevate_task) == 8, "elevate_task must be 8 bytes");
+_Static_assert(offsetof(struct zerosu_elevate_task, start_time) == 0, "start_time @0");
+_Static_assert(_Alignof(struct zerosu_elevate_task) >= 4, "natural alignment");
+_Static_assert(ZSU_PAYLOAD_ELEVATE_TASK == 8, "elevate_task payload is 8 bytes");
+_Static_assert(ZSU_ELEVATE_TASK_LEN == 8, "elevate_task length");
+
+/*
  * The whole point of the explicit pad: a 32 bit task and a 64 bit kernel must
  * derive the same ioctl number. _IOC_* encodes the direction, size, type and
  * nr, so identical size plus identical field offsets means compat_ioctl() can
@@ -67,7 +79,7 @@ _Static_assert(offsetof(struct zerosu_event, payload) == 16, "payload @16");
 _Static_assert(sizeof(struct zerosu_event) == 80, "event is 80 bytes");
 
 /* ---- constants ------------------------------------------------------- */
-_Static_assert(ZSU_ABI_VERSION == 2, "abi version");
+_Static_assert(ZSU_ABI_VERSION == 3, "abi version");
 _Static_assert(ZSU_GATEWAY_MAGIC1 == 0x5A455255u, "magic1");
 _Static_assert(ZSU_GATEWAY_MAGIC2 == 0x00005355u, "magic2");
 _Static_assert(ZSU_SESSION_PLAIN == 0, "plain session");
@@ -93,11 +105,11 @@ int main(void)
 	 * Runtime echo of the one number that actually has to agree across
 	 * ABIs, so a mismatch shows up in CI logs and not just in the build.
 	 */
-	printf("zerosu abi %d: cmd=%zu info=%zu profile=%zu status=%zu event=%zu\n",
+	printf("zerosu abi %d: cmd=%zu info=%zu profile=%zu status=%zu event=%zu elevate_task=%zu\n",
 	       ZSU_ABI_VERSION,
 	       sizeof(struct zerosu_cmd), sizeof(struct zerosu_info),
 	       sizeof(struct zerosu_profile), sizeof(struct zerosu_status),
-	       sizeof(struct zerosu_event));
+	       sizeof(struct zerosu_event), sizeof(struct zerosu_elevate_task));
 	printf("zerosu ioctl(ping)=0x%08lx\n",
 	       (unsigned long)ZSU_IO(ZSU_IOC_NR(ZSU_CMD_PING)));
 	return 0;

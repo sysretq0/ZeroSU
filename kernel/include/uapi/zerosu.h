@@ -27,7 +27,7 @@
 #include <linux/ioctl.h>
 #endif
 
-#define ZSU_ABI_VERSION		2
+#define ZSU_ABI_VERSION		3
 
 /* Gateway handshake. MAGIC1 is also the per command echo value. */
 #define ZSU_GATEWAY_MAGIC1	0x5A455255u	/* "ZERU" */
@@ -94,6 +94,19 @@ enum {
 #define ZSU_KEY_MAX		64	/* AUTH_SET_KEY: raw key bytes */
 #define ZSU_DIGEST_LEN		32	/* AUTH_VERIFY: digest bytes */
 
+/*
+ * ELEVATE_TASK carries the target's start-time token. It is exactly the value
+ * /proc/<pid>/stat renders in field 22, i.e. nsec_to_clock_t(start_boottime),
+ * so userspace can read it from procfs and the kernel can recompute it from
+ * the task it is about to modify. A pid alone is not an identity: pids are
+ * recycled, and a SuperKey holder must not be able to elevate whatever task
+ * happens to inherit a stale number.
+ *
+ * sizeof(struct zerosu_elevate_task) is 8 (one __u64), asserted in
+ * tests/abi_layout.c, and that is the whole payload.
+ */
+#define ZSU_ELEVATE_TASK_LEN	8u
+
 #define ZSU_PAYLOAD_NONE	0u
 /*
  * These use __u32, not u32: this header is included from userspace too, and
@@ -103,6 +116,7 @@ enum {
  */
 #define ZSU_PAYLOAD_KEY		((__u32)ZSU_KEY_MAX)
 #define ZSU_PAYLOAD_DIGEST	((__u32)ZSU_DIGEST_LEN)
+#define ZSU_PAYLOAD_ELEVATE_TASK ((__u32)ZSU_ELEVATE_TASK_LEN)
 
 /* Capability bits reported by ZSU_CMD_GET_PROFILE. */
 #define ZSU_CAP_ELEVATE		0x0001u
@@ -156,6 +170,20 @@ struct zerosu_cmd {
 	__u32 __reserved;
 };
 
+/**
+ * struct zerosu_elevate_task - payload for ZSU_CMD_ELEVATE_TASK
+ * @start_time: the target's start time, exactly as /proc/<pid>/stat field 22
+ *              reports it (nsec_to_clock_t(start_boottime)). 0 is rejected:
+ *              an unset token must never be treated as a wildcard.
+ *
+ * The target pid itself stays in zerosu_cmd.arg, as it always has; this
+ * payload merely adds the identity check that turns "some task with pid N"
+ * into "the specific task the caller observed".
+ */
+struct zerosu_elevate_task {
+	__u64 start_time;
+};
+
 /** struct zerosu_info - reply to ZSU_CMD_GET_INFO */
 struct zerosu_info {
 	__u32 abi_version;
@@ -207,6 +235,11 @@ struct zerosu_event {
  * sizeof(struct zerosu_cmd) is part of the ioctl encoding. It is identical
  * for 32 and 64 bit tasks because the struct is 8 byte aligned and all
  * __u32, which is what lets compat_ioctl() do a verbatim copy.
+ *
+ * Every ZSU_CMD_* has its own request number. The verb is carried a second
+ * time in zerosu_cmd.opcode, and the kernel requires the two to agree
+ * (cmd == ZSU_IO(ZSU_IOC_NR(hdr.opcode))), so the encoding cannot drift
+ * apart from the header.
  */
 #define ZSU_IO(_nr)		_IOWR(ZSU_IOC_MAGIC, (_nr), struct zerosu_cmd)
 

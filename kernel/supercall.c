@@ -132,8 +132,10 @@ static int zerosu_payload_len(u32 opcode, u32 *len)
 	case ZSU_CMD_GET_STATUS:
 	case ZSU_CMD_NEXT_EVENT:
 	case ZSU_CMD_ELEVATE:
-	case ZSU_CMD_ELEVATE_TASK:
 		*len = ZSU_PAYLOAD_NONE;
+		return 0;
+	case ZSU_CMD_ELEVATE_TASK:
+		*len = ZSU_PAYLOAD_ELEVATE_TASK;
 		return 0;
 	case ZSU_CMD_AUTH_SET_KEY:
 		*len = ZSU_PAYLOAD_KEY;
@@ -368,8 +370,6 @@ long zerosu_supercall_ioctl(struct file *file, unsigned int cmd,
 
 	if (!ctx)
 		return -ENOTTY;
-	if (cmd != ZSU_IO(ZSU_IOC_NR(ZSU_CMD_PING)))
-		return -ENOTTY;
 
 	/* The header is the only thing read before it is validated. */
 	if (copy_from_user(&hdr, (void __user *)arg, sizeof(hdr)))
@@ -377,6 +377,23 @@ long zerosu_supercall_ioctl(struct file *file, unsigned int cmd,
 	if (hdr.magic != ZSU_CMD_MAGIC) {
 		ctx->last_error = -EIO;
 		return -EIO;
+	}
+
+	/*
+	 * The request number and the verb have to agree.
+	 *
+	 * Each command has its own ioctl number (ZSU_IO(ZSU_IOC_NR(op)), which
+	 * embeds ZSU_IOC_MAGIC and sizeof(struct zerosu_cmd)), and the same
+	 * verb is also carried in hdr.opcode so a single compat_ioctl copy can
+	 * serve both. Validating the number against the opcode - rather than
+	 * against a fixed one - means the two encodings cannot disagree, and
+	 * the payload-length table below remains the single authority on which
+	 * opcodes exist. This must run after the header fetch because opcode
+	 * lives in the header.
+	 */
+	if (cmd != ZSU_IO(ZSU_IOC_NR(hdr.opcode))) {
+		ctx->last_error = -ENOTTY;
+		return -ENOTTY;
 	}
 	if (hdr.__reserved != 0) {
 		ctx->last_error = -EINVAL;
@@ -528,9 +545,23 @@ long zerosu_supercall_ioctl(struct file *file, unsigned int cmd,
 		}
 		ret = zerosu_elevate(hdr.arg);
 		break;
-	case ZSU_CMD_ELEVATE_TASK:
-		ret = zerosu_elevate_task(hdr.arg, ZSU_ELEVATE_MODE_TASK);
+	case ZSU_CMD_ELEVATE_TASK: {
+		struct zerosu_elevate_task et;
+
+		/*
+		 * The payload is exactly one start-time token. It is fetched
+		 * once, here, and never re-read; the pid stays in arg. A
+		 * mismatch against the live task fails closed inside
+		 * zerosu_elevate_task().
+		 */
+		if (copy_from_user(&et, payload, sizeof(et))) {
+			ret = -EFAULT;
+			break;
+		}
+		ret = zerosu_elevate_task((pid_t)hdr.arg, ZSU_ELEVATE_MODE_TASK,
+					  et.start_time);
 		break;
+	}
 	case ZSU_CMD_NEXT_EVENT: {
 		struct zerosu_event ev;
 
@@ -570,8 +601,15 @@ out_perm:
 	/* Elevation bookkeeping, only on a clean success. */
 	if (!ret && (hdr.opcode == ZSU_CMD_ELEVATE ||
 		     hdr.opcode == ZSU_CMD_ELEVATE_TASK)) {
+		/*
+		 * hdr.arg is the elevation mode for ELEVATE and the target pid
+		 * for ELEVATE_TASK, so it is only a valid mode for the former.
+		 */
+		u32 grant_mode = (hdr.opcode == ZSU_CMD_ELEVATE) ?
+			hdr.arg : ZSU_ELEVATE_MODE_TASK;
+
 		mutex_lock(&ctx->event_lock);
-		zerosu_note_elevated(ctx, hdr.arg);
+		zerosu_note_elevated(ctx, grant_mode);
 		mutex_unlock(&ctx->event_lock);
 	}
 

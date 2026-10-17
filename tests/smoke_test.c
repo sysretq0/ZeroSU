@@ -29,16 +29,24 @@
 
 #include "uapi/zerosu.h"
 
-/* Header plus the largest reply any command produces. */
-union zsu_reply {
+/*
+ * One ioctl exchange: the 24-byte command header, immediately followed by
+ * the payload and then the reply. The kernel writes the reply at offset
+ * sizeof(struct zerosu_cmd), so this cannot be a flat union - a flat union
+ * would alias the reply onto the header.
+ */
+struct zsu_msg {
 	struct zerosu_cmd hdr;
-	__u32 abi;
-	struct zerosu_info info;
-	struct zerosu_status status;
-	struct zerosu_event event;
-	__u8 key[ZSU_KEY_MAX];
-	__u8 raw[sizeof(struct zerosu_cmd) + sizeof(struct zerosu_status) +
-		ZSU_KEY_MAX];
+	union {
+		__u32 abi;			/* PING reply */
+		struct zerosu_info info;	/* GET_INFO reply */
+		struct zerosu_status status;	/* GET_STATUS reply */
+		struct zerosu_event event;	/* NEXT_EVENT reply */
+		struct zerosu_elevate_task elevate_task;
+		__u8 key[ZSU_KEY_MAX];		/* AUTH_SET_KEY payload */
+		__u8 digest[ZSU_DIGEST_LEN];	/* AUTH_VERIFY payload */
+		__u8 raw[sizeof(struct zerosu_status) + ZSU_KEY_MAX];
+	};
 };
 
 static const char *basename_of(const char *p)
@@ -50,7 +58,7 @@ static const char *basename_of(const char *p)
 
 int main(int argc, char **argv)
 {
-	union zsu_reply buf;
+	struct zsu_msg buf;
 	const bool want_su = (argc > 1 && !strcmp(argv[1], "su"));
 	const bool want_key = (argc > 2);
 	int fd = -1;

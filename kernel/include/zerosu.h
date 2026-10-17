@@ -150,7 +150,7 @@ void zerosu_seccomp_exit(void);
 /* elevate.c */
 int zsu_elevate_syms_init(void);
 int zerosu_elevate(u32 mode);
-int zerosu_elevate_task(u32 pid_nr, u32 mode);
+int zerosu_elevate_task(pid_t pid_nr, u32 mode, u64 start_time);
 
 /*
  * Fail closed helper: a NULL kernel pointer for an entry point we resolved
