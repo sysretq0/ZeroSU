@@ -9,9 +9,12 @@ range **without a single hotpath hook, without a single `#ifdef` in a `.c`
 file, and without a single unverified assumption about a kernel ABI** — and
 that you can prove which parts are actually verified rather than assert it.
 
-**The deliverable is `kernel/`.** Full userspace (a library, a CLI, a manager
-UI) is explicitly **out of scope** — see [Scope](#scope). `tests/` exists to
-*prove* the design compiles and lays out correctly, not to ship a product.
+**The core deliverable is `kernel/`.** Alongside it is a single-threaded
+reference `userspace/` tree — the daemon (`zerosud`), the `/system/bin/su`
+stub, and the `zsu_ctl` CLI — that exercises the ABI end to end. A manager UI,
+key-management UX and OTA flow remain **out of scope** — see [Scope](#scope).
+`tests/` exists to *prove* the design compiles and lays out correctly, not to
+ship a product.
 
 ---
 
@@ -76,14 +79,16 @@ elevate itself.
 ## Scope
 
 **In scope:** the kernel module (`kernel/`), the UAPI contract, the offline
-verification harness (`tests/`), and the research notes below.
+verification harness (`tests/`), a single-threaded reference userspace tree
+(`userspace/`), and the research notes below.
 
-**Out of scope, on purpose:** `libzerosu`, `zerosu-cli`, key management UI,
-manager integration, OTA/update flow, and multi-session UX. None of that is
-novel research — it is C plumbing, and building it would obscure the thing
-this repository is actually about. A ~100-line `tests/smoke_test.c` exists
-solely to show how userspace talks to the ABI, and to prove the UAPI header is
-usable from an ordinary host program.
+**Out of scope, on purpose:** a manager UI, OTA/update flow, multi-session UX,
+and non-Android targets. None of that is novel research — it is C plumbing.
+`userspace/` is deliberately the smallest tree that can drive the ABI on a
+real device (one daemon, one `su` stub, one CLI) and it is a reference, not a
+product. A ~100-line `tests/smoke_test.c` also exists, purely to show how
+userspace talks to the ABI and to prove the UAPI header is usable from an
+ordinary host program.
 
 **Not tested on hardware.** Nothing here has been loaded on a device. See
 [Verification](#verification) for exactly what that means.
@@ -272,6 +277,16 @@ Being explicit about this is the point:
   refuse a kernel it does not recognise, not to guess.
 - `alloc_uid()` is resolved, not called, because it is not exported. Its
   signature is verified; the *resolution* is untested at runtime.
+- **`userspace/` compiles, but has never been run.** No daemon, no stub, no
+  `su` transition has executed on a device. It links no library beyond libc
+  and the kernel ABI it uses is the committed one, but "compiles" is the
+  strongest claim available here.
+- **The doorbell assumes an app may `open()` the stub it executes.** The stub
+  is labelled `system_linker_exec` and rings by opening its own binary; AOSP
+  app domains get `x_file_perms` (`execute`, not `open`/`read`) on executable
+  system files. If that open is denied, the inotify doorbell never fires and
+  the transition stalls. This is a policy question to settle on hardware, not
+  something the compiler can catch.
 
 ---
 
@@ -302,6 +317,26 @@ sudo /tmp/zsu-smoke su key # enroll, verify, elevate, drain events
 
 Note the raw `syscall(__NR_reboot, …)`, not libc's `reboot()` — see the first
 row of the corrections table.
+
+### Reference userspace (`userspace/`)
+
+Three binaries, no shared library, no build system beyond a Makefile:
+
+| File | Role |
+|---|---|
+| `userspace/daemon/` | `zerosud`: a strictly single-threaded epoll daemon (no threads, no `fork`, no `/proc` scans). ctl socket, `packages.list` cache, logdr spawn monitor, per-uid inotify doorbells, inline mount-namespace overlay injection, and the only code that speaks the ioctl ABI. |
+| `userspace/su/zsu_stub.c` | the template `/system/bin/su`: parks two anonymous pipes on fixed descriptors, rings the daemon by opening its own binary, waits for the one-byte ack, then execs `/system/bin/sh`. |
+| `userspace/ctl/zsu_ctl.c` | the orchestrator: `patch`, `allow`, `revoke`, `list`, `status`, `ping`, `shell`. `patch` stamps the SuperKey into the daemon's ELF slot and prints it once. |
+
+```sh
+cd userspace && make      # builds zerosud, zsu_stub, zsu_ctl (-Wall -Wextra -Werror)
+cd userspace && make check # same kernel-side checks as tests/syntax-check.sh
+```
+
+There is no key file anywhere: `zsu_ctl patch <zerosud> [hex_key]` finds the
+one unpatched `ZSUKEY00` slot in the daemon's image, writes 64 key bytes, and
+prints them exactly once; the daemon `explicit_bzero()`s the slot after it has
+authenticated the kernel session.
 
 ---
 

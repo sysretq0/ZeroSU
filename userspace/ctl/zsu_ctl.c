@@ -71,11 +71,15 @@ static int ctl_call(struct zsu_ctl_req *req, struct zsu_ctl_resp *resp)
 		return -e;
 	}
 
-	if (send(fd, req, sizeof(*req), 0) != (ssize_t)sizeof(*req)) {
-		int e = errno ? errno : EIO;
+	{
+		ssize_t n = send(fd, req, sizeof(*req), 0);
 
-		close(fd);
-		return -e;
+		if (n != (ssize_t)sizeof(*req)) {
+			int e = n < 0 ? errno : EIO;
+
+			close(fd);
+			return -e;
+		}
 	}
 
 	memset(resp, 0, sizeof(*resp));
@@ -229,8 +233,13 @@ static int do_shell(int argc, char **argv)
 	uint8_t key[ZSU_PATCH_KEY_LEN];
 	struct zsu_ctl_req req;
 	struct zsu_ctl_resp resp;
+	const char *envkey, *elfpath;
 	uint64_t start;
 	int rc;
+
+	/* Read the environment once: precedence is arg, ZSU_KEY, ZSU_ZEROSUD. */
+	envkey = getenv("ZSU_KEY");
+	elfpath = getenv("ZSU_ZEROSUD");
 
 	if (argc > 0) {
 		if (zsu_hex_decode(argv[0], key, ZSU_PATCH_KEY_LEN)) {
@@ -238,18 +247,18 @@ static int do_shell(int argc, char **argv)
 				ZSU_PATCH_KEY_LEN * 2);
 			return 2;
 		}
-	} else if (getenv("ZSU_KEY")) {
-		if (zsu_hex_decode(getenv("ZSU_KEY"), key, ZSU_PATCH_KEY_LEN)) {
+	} else if (envkey) {
+		if (zsu_hex_decode(envkey, key, ZSU_PATCH_KEY_LEN)) {
 			fprintf(stderr, "zsu_ctl: ZSU_KEY must be %d hex chars\n",
 				ZSU_PATCH_KEY_LEN * 2);
 			return 2;
 		}
-	} else if (getenv("ZSU_ZEROSUD")) {
-		rc = key_from_elf(getenv("ZSU_ZEROSUD"), key);
+	} else if (elfpath) {
+		rc = key_from_elf(elfpath, key);
 		if (rc) {
 			fprintf(stderr,
 				"zsu_ctl: cannot read key from %s: %s\n",
-				getenv("ZSU_ZEROSUD"), strerror(-rc));
+				elfpath, strerror(-rc));
 			return 1;
 		}
 	} else {

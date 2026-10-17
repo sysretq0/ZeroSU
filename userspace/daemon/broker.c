@@ -28,6 +28,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -224,6 +225,7 @@ int broker_handle(int cfd)
 	struct zsu_ctl_req req;
 	struct zsu_ctl_resp resp;
 	struct ucred cred;
+	struct pollfd pfd;
 	socklen_t clen = sizeof(cred);
 	ssize_t n;
 	uid_t uid;
@@ -232,11 +234,29 @@ int broker_handle(int cfd)
 	memset(&req, 0, sizeof(req));
 	memset(&resp, 0, sizeof(resp));
 
-	n = recv(cfd, &req, sizeof(req), 0);
-	if (n < (ssize_t)offsetof(struct zsu_ctl_req, pkg)) {
-		reply_err(&resp, -EINVAL, "malformed request");
+	/*
+	 * The accepted socket is non-blocking, and a listening AF_UNIX socket
+	 * becomes readable when connect() completes - possibly before the
+	 * client's send() has run. Poll so that window cannot turn a valid
+	 * request into a spurious -EINVAL.
+	 */
+	pfd.fd = cfd;
+	pfd.events = POLLIN;
+	if (poll(&pfd, 1, 2000) <= 0) {
+		reply_err(&resp, -ETIMEDOUT, "no request");
 		goto send;
 	}
+
+	n = recv(cfd, &req, sizeof(req), 0);
+	if (n < (ssize_t)offsetof(struct zsu_ctl_req, pkg)) {
+		reply_err(&resp, n < 0 ? -errno : -EINVAL, "malformed request");
+		goto send;
+	}
+	/*
+	 * The request is untrusted. A full-size datagram may leave pkg[]
+	 * without a NUL, so terminate it before any string function sees it.
+	 */
+	req.pkg[sizeof(req.pkg) - 1] = '\0';
 	if (req.flags != 0) {
 		reply_err(&resp, -EINVAL, "reserved flags must be zero");
 		goto send;
@@ -308,7 +328,8 @@ int broker_handle(int cfd)
 		{
 			bool ok = false;
 
-			rc = session_verify_plain(req.key, &ok);
+			/* The boolean is the verdict; the errno is only context. */
+			(void)session_verify_plain(req.key, &ok);
 			if (!ok) {
 				reply_err(&resp, -EACCES, "shell: bad SuperKey");
 				break;
@@ -316,10 +337,29 @@ int broker_handle(int cfd)
 		}
 		{
 			char dir[64];
+			struct stat st;
 			uint64_t start;
+			int dfd;
 
 			snprintf(dir, sizeof(dir), "/proc/%d", (int)cred.pid);
-			rc = zsu_proc_start_time_path(dir, &start);
+			dfd = open(dir, O_DIRECTORY | O_CLOEXEC);
+			if (dfd < 0) {
+				reply_err(&resp, -errno, "shell: no such process");
+				break;
+			}
+			/*
+			 * Pin the task's /proc entry and confirm it still belongs
+			 * to the peer. A pid recycled between SO_PEERCRED and here
+			 * would otherwise let the caller elevate a stranger; the
+			 * start-time token closes whatever race remains.
+			 */
+			if (fstat(dfd, &st) || (uid_t)st.st_uid != cred.uid) {
+				close(dfd);
+				reply_err(&resp, -EPERM, "shell: process changed");
+				break;
+			}
+			rc = zsu_proc_start_time_fd(dfd, &start);
+			close(dfd);
 			if (rc) {
 				reply_err(&resp, rc, "shell: no such process");
 				break;

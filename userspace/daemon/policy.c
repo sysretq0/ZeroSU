@@ -198,7 +198,6 @@ int policy_refresh_packages(void)
 	FILE *f;
 	char *line = NULL;
 	size_t cap = 0;
-	ssize_t n;
 	int seen = 0;
 
 	f = fopen(ZSU_PACKAGES_LIST, "re");
@@ -214,13 +213,15 @@ int policy_refresh_packages(void)
 	pkg_cap = 0;
 	pkg_count = 0;
 
-	while ((n = getline(&line, &cap, f)) > 0) {
+	for (;;) {
 		char *save = NULL;
-		char *name = strtok_r(line, " \t\n", &save);
-		char *uid = strtok_r(NULL, " \t\n", &save);
-		char *end;
+		char *name, *uid, *end;
 		unsigned long v;
 
+		if (getline(&line, &cap, f) <= 0)
+			break;
+		name = strtok_r(line, " \t\n", &save);
+		uid = strtok_r(NULL, " \t\n", &save);
 		if (!name || !uid)
 			continue;
 		errno = 0;
@@ -631,16 +632,18 @@ int policy_load_grants(void)
 	FILE *f;
 	char *line = NULL;
 	size_t cap = 0;
-	ssize_t n;
 
 	f = fopen(ZSU_GRANTS_FILE, "re");
 	if (!f)
 		return 0;	/* first boot: no grants yet */
 
-	while ((n = getline(&line, &cap, f)) > 0) {
+	for (;;) {
 		char *end;
-		unsigned long v = strtoul(line, &end, 10);
+		unsigned long v;
 
+		if (getline(&line, &cap, f) <= 0)
+			break;
+		v = strtoul(line, &end, 10);
 		if (end != line)
 			uid_insert((uid_t)v);
 	}

@@ -11,3 +11,8 @@ Module.symvers
 # host test binaries
 /zerosu-smoke
 /zsu-abi-layout
+
+# userspace reference build artifacts
+/userspace/zerosud
+/userspace/zsu_stub
+/userspace/zsu_ctl
