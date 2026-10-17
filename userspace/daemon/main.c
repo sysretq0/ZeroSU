@@ -135,7 +135,12 @@ static void drain_inotify(void)
 			} else {
 				uid_t uid;
 
-				if (!policy_doorbell_uid(ev->wd, &uid))
+				/*
+				 * Defense in depth: a stale watch must never
+				 * elevate a uid whose grant is gone.
+				 */
+				if (!policy_doorbell_uid(ev->wd, &uid) &&
+				    policy_uid_allowed(uid))
 					broker_doorbell(uid);
 			}
 			p += sizeof(*ev) + ev->len;

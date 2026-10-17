@@ -603,8 +603,10 @@ int policy_stage_uid(uid_t uid)
 			return -ENAMETOOLONG;
 
 		rc = zsu_copy_file(ZSU_STUB_BIN, tmp, 0755);
-		if (rc)
+		if (rc) {
+			unlink(tmp);
 			return rc;
+		}
 
 		if (chown(tmp, 0, 0))
 			zsu_warn("chown %s: %s", tmp, strerror(errno));
@@ -659,22 +661,33 @@ int policy_arm_doorbell(uid_t uid)
 void policy_disarm_doorbell(uid_t uid)
 {
 	size_t i;
-	int wd = -1;
 
 	if (inotify_fd < 0 || !wd_tab)
 		return;
-	for (i = 0; i < wd_cap; i++) {
-		if (wd_tab[i].used && wd_tab[i].uid == (uint32_t)uid) {
-			wd = wd_tab[i].wd;
-			break;
-		}
-	}
-	if (wd < 0)
-		return;
 
-	/* Collect first: wd_remove() rebuilds the table. */
-	inotify_rm_watch(inotify_fd, wd);
-	wd_remove(wd);
+	/*
+	 * wd_tab is keyed by wd, not uid: a re-stage (rename) installs a fresh
+	 * inode before the old watch's IN_IGNORED has drained, so two entries
+	 * can carry the same uid. Remove every match; a leftover watch would
+	 * still let a revoked uid ring the doorbell.
+	 */
+	for (;;) {
+		int wd = -1;
+
+		for (i = 0; i < wd_cap; i++) {
+			if (wd_tab[i].used &&
+			    wd_tab[i].uid == (uint32_t)uid) {
+				wd = wd_tab[i].wd;
+				break;
+			}
+		}
+		if (wd < 0)
+			return;
+
+		/* Collect first: wd_remove() rebuilds the table. */
+		inotify_rm_watch(inotify_fd, wd);
+		wd_remove(wd);
+	}
 }
 
 /* ------------------------------------------------------------------ */
@@ -727,7 +740,18 @@ static int policy_save_grants(void)
 		unlink(tmp);
 		return -e;
 	}
-	return 0;
+
+	/* Make the rename itself durable, not just the file data. */
+	{
+		int dfd = open(ZSU_BASE_DIR, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+
+		if (dfd >= 0) {
+			if (fsync(dfd))
+				rc = -errno;
+			close(dfd);
+		}
+	}
+	return rc;
 }
 
 int policy_load_grants(void)

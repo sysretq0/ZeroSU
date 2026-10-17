@@ -189,18 +189,6 @@ int zsu_read_file(const char *path, void *buf, size_t n)
 	return (int)off;
 }
 
-int zsu_write_file(const char *path, const void *buf, size_t n)
-{
-	int fd, rc;
-
-	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-	if (fd < 0)
-		return -errno;
-	rc = zsu_write_all(fd, buf, n);
-	close(fd);
-	return rc;
-}
-
 int zsu_copy_file(const char *src, const char *dst, mode_t mode)
 {
 	char buf[65536];
@@ -492,9 +480,9 @@ static int scan_procs(const char *dir, int (*cb)(pid_t, void *), void *arg)
 	if (off == sizeof(buf) - 1) {
 		char *nl = memrchr(buf, '\n', off);
 
-		if (nl)
+		if (nl && nl + 1 < buf + off)
 			*nl = '\0';
-		else
+		else if (!nl)
 			return 0;
 	}
 

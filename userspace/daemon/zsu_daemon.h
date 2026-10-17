@@ -40,7 +40,6 @@ int  zsu_mkdir_p(const char *path, mode_t mode);
 int  zsu_chmod(const char *path, mode_t mode);
 int  zsu_write_all(int fd, const void *buf, size_t n);
 int  zsu_read_file(const char *path, void *buf, size_t n);
-int  zsu_write_file(const char *path, const void *buf, size_t n);
 int  zsu_copy_file(const char *src, const char *dst, mode_t mode);
 int  zsu_set_selinux_label(const char *path, const char *ctx);
 int  zsu_write_attr(const char *attr, const char *ctx);
