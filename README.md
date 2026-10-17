@@ -266,8 +266,11 @@ is *unusable* from userspace).
 Being explicit about this is the point:
 
 - **Nothing has been run on hardware.** No `insmod`, no ioctl, no reboot.
-- `make -C $KDIR M=… modules` has never been executed — there is no configured
-  kernel tree in this environment. The build files are written but untested.
+- The module has never been *loaded*, but it does compile: CI builds it for
+  all eight KMIs with the DDK clang+CFI toolchain (see
+  [Prebuilt modules, KernelSU-style](#prebuilt-modules-kernelsu-style)).
+  "It builds with the same compiler and headers as the device" is the
+  strongest claim that path supports; it is not a load test.
 - The mirrored `policydb` layout assumes `CONFIG_RANDSTRUCT` is off. It is,
   on every GKI `arm64/gki_defconfig` checked — and `compat.h` fails the build
   if it ever is not, because `__randomize_layout` is on `struct policydb`,
