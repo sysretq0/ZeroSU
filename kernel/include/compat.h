@@ -253,6 +253,17 @@ struct zsu_cond_bool_datum {
 
 struct zsu_policydb {
 	int mls_enabled;
+	/*
+	 * Android's policydb carries its two netlink policy flags *here*,
+	 * ahead of the symbol tables (and again, as bools, in
+	 * struct selinux_state). They are plain ints and unconditional in the
+	 * GKI 5.10..6.18 header, but they shift every offset below by 8
+	 * bytes. Dropping them is not a cosmetic mistake: the sanity check
+	 * still passes (it reads symtab[3].table.nel, which tracks nprim)
+	 * and then symtab_search() dereferences a garbage hashtab -> panic.
+	 */
+	int android_netlink_route;
+	int android_netlink_getneigh;
 
 	/* symbol tables */
 	struct zsu_symtab symtab[ZSU_SYM_NUM];
@@ -397,6 +408,61 @@ static_assert(offsetof(struct zsu_cred_sec, sockcreate_sid) == 20,
 	      "zsu: sockcreate_sid @20");
 static_assert(offsetof(struct zsu_selinux_policy, policydb) == 8,
 	      "zsu: selinux_policy layout drift");
+
+/*
+ * policydb offsets, pinned field by field. The mirrored struct is
+ * version independent (5.10 .. 6.18 all declare the same fields in the same
+ * order), but a *missing* field is invisible to a size check and shifts every
+ * offset below it. That is exactly how the android_netlink_route/getneigh
+ * pair was dropped once: the layout check still passed and symtab_search()
+ * then walked a garbage hashtab. These asserts make a dropped field a build
+ * error. Values are LP64 (the only GKI word size).
+ */
+static_assert(sizeof(struct zsu_policydb) == 576, "zsu: policydb size drift");
+static_assert(offsetof(struct zsu_policydb, symtab) == 16,
+	      "zsu: policydb.symtab drift (leading ints lost?)");
+static_assert(offsetof(struct zsu_policydb, sym_val_to_name) == 208,
+	      "zsu: policydb.sym_val_to_name drift");
+static_assert(offsetof(struct zsu_policydb, class_val_to_struct) == 272,
+	      "zsu: policydb.class_val_to_struct drift");
+static_assert(offsetof(struct zsu_policydb, role_val_to_struct) == 280,
+	      "zsu: policydb.role_val_to_struct drift");
+static_assert(offsetof(struct zsu_policydb, user_val_to_struct) == 288,
+	      "zsu: policydb.user_val_to_struct drift");
+static_assert(offsetof(struct zsu_policydb, type_val_to_struct) == 296,
+	      "zsu: policydb.type_val_to_struct drift");
+static_assert(offsetof(struct zsu_policydb, te_avtab) == 304,
+	      "zsu: policydb.te_avtab drift");
+static_assert(offsetof(struct zsu_policydb, role_tr) == 328,
+	      "zsu: policydb.role_tr drift");
+static_assert(offsetof(struct zsu_policydb, filename_trans_ttypes) == 344,
+	      "zsu: policydb.filename_trans_ttypes drift");
+static_assert(offsetof(struct zsu_policydb, filename_trans) == 360,
+	      "zsu: policydb.filename_trans drift");
+static_assert(offsetof(struct zsu_policydb, compat_filename_trans_count) == 376,
+	      "zsu: policydb.compat_filename_trans_count drift");
+static_assert(offsetof(struct zsu_policydb, bool_val_to_struct) == 384,
+	      "zsu: policydb.bool_val_to_struct drift");
+static_assert(offsetof(struct zsu_policydb, te_cond_avtab) == 392,
+	      "zsu: policydb.te_cond_avtab drift");
+static_assert(offsetof(struct zsu_policydb, cond_list) == 416,
+	      "zsu: policydb.cond_list drift");
+static_assert(offsetof(struct zsu_policydb, cond_list_len) == 424,
+	      "zsu: policydb.cond_list_len drift");
+static_assert(offsetof(struct zsu_policydb, role_allow) == 432,
+	      "zsu: policydb.role_allow drift");
+static_assert(offsetof(struct zsu_policydb, ocontexts) == 440,
+	      "zsu: policydb.ocontexts drift (OCON_NUM not 9?)");
+static_assert(offsetof(struct zsu_policydb, genfs) == 512,
+	      "zsu: policydb.genfs drift");
+static_assert(offsetof(struct zsu_policydb, range_tr) == 520,
+	      "zsu: policydb.range_tr drift");
+static_assert(offsetof(struct zsu_policydb, type_attr_map_array) == 536,
+	      "zsu: policydb.type_attr_map_array drift");
+static_assert(offsetof(struct zsu_policydb, policycaps) == 544,
+	      "zsu: policydb.policycaps drift");
+static_assert(offsetof(struct zsu_policydb, permissive_map) == 560,
+	      "zsu: policydb.permissive_map drift");
 
 /* ========================================================================
  * Resolved kernel entry points
@@ -562,6 +628,18 @@ static inline bool zsu_selinux_layout_check(const struct zsu_policydb *p)
 	/* every indexed array must exist before it is indexed */
 	if (!p->type_val_to_struct || !p->type_attr_map_array ||
 	    !p->sym_val_to_name[ZSU_SYM_TYPES] || !p->role_val_to_struct)
+		return false;
+
+	/*
+	 * hashtab sanity before the name lookup. symtab_search() reads
+	 * table.htable[hash(name) & (size - 1)], so an offset mistake that
+	 * leaves htable or size garbage turns "refuse to load" into a wild
+	 * read - which is exactly how the missing android_netlink_* ints in
+	 * this very struct used to manifest. size is a small power of two.
+	 */
+	if (!p->p_types.table.htable || !p->p_types.table.size ||
+	    p->p_types.table.size > 0x100000 ||
+	    p->p_types.table.nel > 0x100000)
 		return false;
 
 	/*
