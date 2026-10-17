@@ -32,7 +32,7 @@ DAEMON_SRCS := \
 CTL_SRCS := ctl/zsu_ctl.c daemon/util.c
 SU_SRCS  := su/zsu_stub.c
 
-.PHONY: all clean check
+.PHONY: all clean check install
 
 all: zerosud zsu_stub zsu_ctl
 
@@ -45,9 +45,26 @@ zsu_stub: $(SU_SRCS)
 zsu_ctl: $(CTL_SRCS)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(CTL_SRCS) $(LDFLAGS)
 
+# Stage exactly the on-device layout. The 0711 on /data/adb/zerosu is what lets
+# adb shell (uid 2000, gid shell) traverse to ctl.sock. bin/ is 0755 so the
+# shell can execute the CLI, but the daemon and the stub inside it stay 0700.
+# /data/adb itself is chmod 0711 at daemon startup (policy_init_paths) rather
+# than here, because install(1) cannot set a mode on a directory it did not
+# create.
+PREFIX ?= /data/adb/zerosu
+
+install: all
+	install -d -m 0711 $(DESTDIR)$(PREFIX)
+	install -d -m 0755 $(DESTDIR)$(PREFIX)/bin
+	install -d -m 0700 $(DESTDIR)$(PREFIX)/uids
+	install -m 0700 zerosud $(DESTDIR)$(PREFIX)/bin/zerosud
+	install -m 0700 zsu_stub $(DESTDIR)$(PREFIX)/bin/zsu_stub
+	install -m 0755 zsu_ctl $(DESTDIR)$(PREFIX)/bin/zsu_ctl
+
 clean:
 	rm -f zerosud zsu_stub zsu_ctl
 
-# The kernel-side checks (UAPI ABI + stub syntax + auth regression guard).
+# The full offline check: UAPI ABI, kernel syntax matrix, auth regression
+# guard, userspace compile, and the EventLog decoder regression.
 check:
 	sh $(ROOT)/../tests/syntax-check.sh
