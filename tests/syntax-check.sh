@@ -1,7 +1,7 @@
 #!/bin/sh
 # ZeroSU - tests/syntax-check.sh
 #
-# Two independent checks, neither of which needs a kernel tree:
+# Three independent checks, none of which needs a kernel tree:
 #
 #   1. UAPI ABI      - compiles and runs tests/abi_layout.c against the real
 #                      uapi/zerosu.h. Every struct size and field offset is a
@@ -15,6 +15,11 @@
 #                      kernel version anchor. This catches type errors, label
 #                      and exit-path wiring bugs, and the mirrored-ABI
 #                      static_assert sizes without building a kernel.
+#
+#   3. Userspace     - compiles every userspace/*.c with -fsyntax-only under
+#                      the same flags userspace/Makefile uses (-std=gnu11
+#                      -Wall -Wextra -Werror). It needs no Android libraries:
+#                      the daemon, stub and ctl are raw syscalls and libc.
 #
 # Note that (2) is a syntax/type check, not a build: it cannot catch a kernel
 # ABI mismatch. That is what zsu_selinux_layout_sane() and the
@@ -127,6 +132,51 @@ fi
 if [ "$fail_perm" -eq 0 ]; then
 	printf 'ok: hdr.flags rejected, permissions kernel-derived\n'
 else
+	fail=1
+fi
+
+say ""
+say "=== 4. Userspace sources ==="
+#
+# Same flags as userspace/Makefile. Kept here (rather than shelling into
+# `make -C userspace check`, which itself runs this script) so the check has
+# no recursion and runs everywhere a host cc exists.
+for src in \
+	"$ROOT"/userspace/daemon/*.c \
+	"$ROOT"/userspace/su/*.c \
+	"$ROOT"/userspace/ctl/*.c; do
+	[ -e "$src" ] || continue
+	rel=${src#"$ROOT"/}
+	printf '  %-28s ' "$rel"
+	if "$CC" -fsyntax-only -std=gnu11 -Wall -Wextra -Werror -D_GNU_SOURCE \
+		-I "$ROOT/userspace/include" \
+		-I "$ROOT/kernel/include" \
+		-I "$ROOT/userspace/daemon" \
+		"$src" 2>/tmp/zsu-user-err; then
+		printf 'ok\n'
+	else
+		printf 'FAIL\n'
+		head -20 /tmp/zsu-user-err
+		fail=1
+	fi
+done
+
+say ""
+say "=== 5. EventLog decoder regression ==="
+#
+# proc_monitor.c decodes Android's binary event log. The format is easy to get
+# subtly wrong (list header, per-element type bytes, length-prefixed strings),
+# so the decoder is exercised against hand-built AOSP-encoded payloads rather
+# than trusted to compile.
+if "$CC" -O0 -std=gnu11 -Wall -Wextra -Werror -D_GNU_SOURCE \
+	-I "$ROOT/userspace/include" \
+	-I "$ROOT/kernel/include" \
+	-I "$ROOT/userspace/daemon" \
+	-o /tmp/zsu-evtags "$ROOT/tests/evtags_decode_test.c" \
+	&& /tmp/zsu-evtags; then
+	:
+else
+	say "FAIL: EventLog decoder regression"
 	fail=1
 fi
 
