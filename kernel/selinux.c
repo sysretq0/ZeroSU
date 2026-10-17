@@ -106,9 +106,14 @@ int zerosu_selinux_init(void)
 	if (rc)
 		return rc;
 
-	rc = zsu_lsm_cred_probe();
-	if (rc)
-		return rc;
+	/*
+	 * zsu_lsm_cred_probe() returns a bool (true = the cred blob offset is
+	 * known and usable), not an errno. Refuse to load rather than expose a
+	 * module whose one job - stamping the domain into a cred - cannot be
+	 * done, which is the same fail-closed rule zsu_sepolicy_add() follows.
+	 */
+	if (!zsu_lsm_cred_probe())
+		return -ENODEV;
 
 	/*
 	 * The type has to exist before the context can be resolved, which is
