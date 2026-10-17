@@ -512,7 +512,7 @@ int policy_work_path(uid_t uid, char *buf, size_t n)
 	return (r < 0 || (size_t)r >= n) ? -ENAMETOOLONG : 0;
 }
 
-static int policy_stub_path(uid_t uid, char *buf, size_t n)
+int policy_stub_path(uid_t uid, char *buf, size_t n)
 {
 	int r = snprintf(buf, n, ZSU_UIDS_DIR "/%u/upper/su", (unsigned)uid);
 
@@ -681,20 +681,53 @@ void policy_disarm_doorbell(uid_t uid)
 /* grants persistence                                                  */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Persist the grant list. Streamed one uid per line into a temp file that is
+ * fsync'd and renamed over the old list, so a crash mid-write cannot leave a
+ * truncated file and an unbounded number of grants cannot overflow a fixed
+ * buffer.
+ */
 static int policy_save_grants(void)
 {
-	char buf[16 * 4096];
-	size_t off = 0;
+	char tmp[ZSU_PATH_MAX];
+	int fd, rc = 0;
 	size_t i;
 
-	for (i = 0; i < uid_cap && off < sizeof(buf) - 16; i++) {
+	if (snprintf(tmp, sizeof(tmp), "%s.tmp", ZSU_GRANTS_FILE) >=
+	    (int)sizeof(tmp))
+		return -ENAMETOOLONG;
+
+	fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0)
+		return -errno;
+
+	for (i = 0; i < uid_cap; i++) {
+		char line[16];
+		int n;
+
 		if (!uid_tab[i].used)
 			continue;
-		off += (size_t)snprintf(buf + off, sizeof(buf) - off, "%u\n",
-					uid_tab[i].uid);
+		n = snprintf(line, sizeof(line), "%u\n", uid_tab[i].uid);
+		rc = zsu_write_all(fd, line, (size_t)n);
+		if (rc)
+			break;
 	}
 
-	return zsu_write_file(ZSU_GRANTS_FILE, buf, off);
+	if (rc == 0 && fsync(fd))
+		rc = -errno;
+	if (close(fd) && rc == 0)
+		rc = -errno;
+	if (rc) {
+		unlink(tmp);
+		return rc;
+	}
+	if (rename(tmp, ZSU_GRANTS_FILE)) {
+		int e = errno;
+
+		unlink(tmp);
+		return -e;
+	}
+	return 0;
 }
 
 int policy_load_grants(void)
@@ -713,9 +746,13 @@ int policy_load_grants(void)
 
 		if (getline(&line, &cap, f) <= 0)
 			break;
+		errno = 0;
 		v = strtoul(line, &end, 10);
-		if (end != line)
-			uid_insert((uid_t)v);
+		/* A tampered or truncated grants file must not inject uid 0. */
+		if (end == line || errno || line[0] == '-' || v == 0 ||
+		    v > 0xfffffffful)
+			continue;
+		uid_insert((uid_t)v);
 	}
 	free(line);
 	fclose(f);
@@ -752,7 +789,9 @@ int policy_allow_uid(uid_t uid)
 			uid_remove(uid);
 		return rc;
 	}
-	policy_save_grants();
+	rc = policy_save_grants();
+	if (rc)
+		zsu_warn("save grants: %s", strerror(-rc));
 	return 0;
 }
 
@@ -769,7 +808,8 @@ int policy_revoke_uid(uid_t uid)
 
 	uid_remove(uid);
 	policy_disarm_doorbell(uid);
-	policy_save_grants();
+	if (policy_save_grants())
+		zsu_warn("save grants after revoke failed");
 
 	/*
 	 * A revoked uid must stop running now: the grant is gone from RAM, but

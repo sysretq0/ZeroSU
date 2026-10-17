@@ -110,6 +110,9 @@ int zsu_mkdir_p(const char *path, mode_t mode)
 	if (len && tmp[len - 1] == '/')
 		tmp[len - 1] = '\0';
 
+	if (tmp[0] == '\0')
+		return -EINVAL;
+
 	for (p = tmp + 1; *p; p++) {
 		if (*p != '/')
 			continue;
@@ -389,14 +392,17 @@ int zsu_proc_start_time_fd(int pid_dirfd, uint64_t *out)
 int zsu_proc_start_time_path(const char *procdir, uint64_t *out)
 {
 	char path[ZSU_PATH_MAX];
+	int n;
 
-	snprintf(path, sizeof(path), "%s/stat", procdir);
+	n = snprintf(path, sizeof(path), "%s/stat", procdir);
+	if (n < 0 || (size_t)n >= sizeof(path))
+		return -ENAMETOOLONG;
 	{
 		char buf[1024];
-		int n = zsu_read_file(path, buf, sizeof(buf));
+		int r = zsu_read_file(path, buf, sizeof(buf));
 
-		if (n < 0)
-			return n;
+		if (r < 0)
+			return r;
 		return parse_starttime(buf, out);
 	}
 }
@@ -424,8 +430,18 @@ int zsu_pidfd_kill(pid_t pid, int sig)
 		close(fd);
 		if (r == 0)
 			return 0;
+		/*
+		 * Only an absent syscall justifies a bare kill(): on any other
+		 * failure the pidfd is the safer handle, and racing a recycled
+		 * pid would signal the wrong process.
+		 */
+		if (e == ENOSYS)
+			return kill(pid, sig) ? -errno : 0;
 		return -e;
 	}
+	/* Do not fall back on EMFILE etc.: that risks a recycled pid. */
+	if (errno != ENOSYS)
+		return -errno;
 #endif
 	return kill(pid, sig) ? -errno : 0;
 }
@@ -442,7 +458,8 @@ static int scan_procs(const char *dir, int (*cb)(pid_t, void *), void *arg)
 {
 	char path[ZSU_PATH_MAX * 2];
 	char buf[8192];
-	int fd, n;
+	int fd;
+	size_t off = 0;
 	char *p;
 
 	snprintf(path, sizeof(path), "%s/cgroup.procs", dir);
@@ -450,11 +467,36 @@ static int scan_procs(const char *dir, int (*cb)(pid_t, void *), void *arg)
 	if (fd < 0)
 		return 0;	/* not this variant */
 
-	n = (int)read(fd, buf, sizeof(buf) - 1);
+	/* A big uid cgroup can exceed one read; drain until EOF or the buffer. */
+	for (;;) {
+		ssize_t r = read(fd, buf + off, sizeof(buf) - 1 - off);
+
+		if (r < 0) {
+			if (errno == EINTR)
+				continue;
+			close(fd);
+			return 0;
+		}
+		if (r == 0)
+			break;
+		off += (size_t)r;
+		if (off >= sizeof(buf) - 1)
+			break;
+	}
 	close(fd);
-	if (n <= 0)
+	if (off == 0)
 		return 0;
-	buf[n] = '\0';
+	buf[off] = '\0';
+
+	/* Drop a trailing partial number if the buffer filled mid-entry. */
+	if (off == sizeof(buf) - 1) {
+		char *nl = memrchr(buf, '\n', off);
+
+		if (nl)
+			*nl = '\0';
+		else
+			return 0;
+	}
 
 	p = buf;
 	while (*p) {
