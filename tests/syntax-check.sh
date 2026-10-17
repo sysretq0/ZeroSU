@@ -30,12 +30,19 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 CC=${CC:-cc}
 fail=0
 
+# Per-invocation scratch directory. This check runs from `make check`, from CI
+# and by hand, and those can overlap; fixed /tmp paths would let one run clobber
+# another's test binaries and captured compiler stderr. mktemp -d gives each run
+# its own, and the trap removes it on any exit path (including set -e aborts).
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/zsu-check.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT
+
 say() { printf '%s\n' "$*"; }
 
 say "=== 1. UAPI ABI layout ==="
 if "$CC" -Wall -Wextra -Werror -I "$ROOT/kernel/include" \
-	-o /tmp/zsu-abi-layout "$ROOT/tests/abi_layout.c"; then
-	/tmp/zsu-abi-layout
+	-o "$TMP/zsu-abi-layout" "$ROOT/tests/abi_layout.c"; then
+	"$TMP/zsu-abi-layout"
 else
 	say "FAIL: host build of abi_layout.c"
 	fail=1
@@ -44,9 +51,9 @@ fi
 # The 32 bit build is the interesting one: it is what pins sizeof() and the
 # _IOC encoding for compat tasks. Not every host has multilib installed.
 if "$CC" -m32 -Wall -Wextra -Werror -I "$ROOT/kernel/include" \
-	-o /tmp/zsu-abi-layout32 "$ROOT/tests/abi_layout.c" 2>/dev/null; then
+	-o "$TMP/zsu-abi-layout32" "$ROOT/tests/abi_layout.c" 2>/dev/null; then
 	say "32 bit build ok:"
-	/tmp/zsu-abi-layout32
+	"$TMP/zsu-abi-layout32"
 else
 	say "SKIP: no 32 bit multilib toolchain (install gcc-multilib to enable)"
 fi
@@ -82,11 +89,11 @@ for arch in arm64 x86_64 riscv; do
 				-D"$archcfg"=1 \
 				-I "$ROOT/tests/stub-include" \
 				-I "$ROOT/kernel/include" \
-				"$src" 2>/tmp/zsu-syntax-err; then
+				"$src" 2>"$TMP/zsu-syntax-err"; then
 				ok="$ok $base"
 			else
 				printf '\n'
-				head -20 /tmp/zsu-syntax-err
+				head -20 "$TMP/zsu-syntax-err"
 				fail=1
 			fi
 		done
@@ -152,11 +159,11 @@ for src in \
 		-I "$ROOT/userspace/include" \
 		-I "$ROOT/kernel/include" \
 		-I "$ROOT/userspace/daemon" \
-		"$src" 2>/tmp/zsu-user-err; then
+		"$src" 2>"$TMP/zsu-user-err"; then
 		printf 'ok\n'
 	else
 		printf 'FAIL\n'
-		head -20 /tmp/zsu-user-err
+		head -20 "$TMP/zsu-user-err"
 		fail=1
 	fi
 done
@@ -172,8 +179,8 @@ if "$CC" -O0 -std=gnu11 -Wall -Wextra -Werror -D_GNU_SOURCE \
 	-I "$ROOT/userspace/include" \
 	-I "$ROOT/kernel/include" \
 	-I "$ROOT/userspace/daemon" \
-	-o /tmp/zsu-evtags "$ROOT/tests/evtags_decode_test.c" \
-	&& /tmp/zsu-evtags; then
+	-o "$TMP/zsu-evtags" "$ROOT/tests/evtags_decode_test.c" \
+	&& "$TMP/zsu-evtags"; then
 	:
 else
 	say "FAIL: EventLog decoder regression"

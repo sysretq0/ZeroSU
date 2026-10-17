@@ -99,6 +99,7 @@ void policy_forget_wd(int wd);
 
 int  policy_upper_path(uid_t uid, char *buf, size_t n);
 int  policy_work_path(uid_t uid, char *buf, size_t n);
+int  policy_stub_path(uid_t uid, char *buf, size_t n);
 
 /* ------------------------------------------------------------------ */
 /* ns_inject.c                                                         */

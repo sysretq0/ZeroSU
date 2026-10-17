@@ -19,6 +19,15 @@
  * Only /system/bin is ever made private; "/" never is. Making / private would
  * detach the app's entire mount tree and the overlay would stop being a
  * surgical change.
+ *
+ * The overlay alone is not enough for the doorbell. Opening a file *through*
+ * an overlay does not notify the file's upper inode: on 5.10/6.1
+ * ovl_open_realfile() hands the open to open_with_fake_path() with the overlay
+ * dentry, and on 6.18 backing_file_open() sets FMODE_NONOTIFY, so fsnotify
+ * fires on the overlay inode and a watch on upper/su stays silent. After the
+ * overlay lands, the real upper/su is therefore bound directly over
+ * /system/bin/su, so the app's open() resolves to the very inode the daemon
+ * watches.
  */
 
 
@@ -75,6 +84,7 @@ int ns_inject(int pid_dirfd, uid_t uid)
 {
 	char upper[ZSU_PATH_MAX];
 	char work[ZSU_PATH_MAX];
+	char su[ZSU_PATH_MAX];
 	/* "lowerdir=/system/bin,upperdir=,workdir=" plus two paths. */
 	char opts[2 * ZSU_PATH_MAX + 64];
 	int mnt_fd = -1;
@@ -132,8 +142,33 @@ int ns_inject(int pid_dirfd, uid_t uid)
 	 * namespace, i.e. a previous injection landed - success, not failure.
 	 */
 	if (mount("overlay", "/system/bin", "overlay", MS_RDONLY, opts)) {
+		if (errno != EBUSY) {
+			rc = -errno;
+			goto out;
+		}
+	}
+
+	/*
+	 * 5. Bind the real upper/su over the overlaid /system/bin/su. The overlay
+	 *    gives /system/bin/su its dentry; binding the upper file onto it makes
+	 *    the app's open() reach the watched inode instead of the overlay inode
+	 *    (see the file header). EBUSY here means the bind already exists from
+	 *    an earlier injection. The read-only remount matches the overlay, so
+	 *    the app can never write to its own stub.
+	 *
+	 *    There is nothing to undo on the way out: every mount above landed in
+	 *    the app's mount namespace, which the kernel destroys with the app.
+	 */
+	rc = policy_stub_path(uid, su, sizeof(su));
+	if (rc)
+		goto out;
+
+	if (mount(su, "/system/bin/su", NULL, MS_BIND, NULL)) {
 		if (errno != EBUSY)
 			rc = -errno;
+	} else if (mount(NULL, "/system/bin/su", NULL,
+			 MS_BIND | MS_REMOUNT | MS_RDONLY, NULL)) {
+		rc = -errno;
 	}
 
 out:

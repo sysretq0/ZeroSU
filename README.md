@@ -281,12 +281,19 @@ Being explicit about this is the point:
   `su` transition has executed on a device. It links no library beyond libc
   and the kernel ABI it uses is the committed one, but "compiles" is the
   strongest claim available here.
-- **The doorbell assumes an app may `open()` the stub it executes.** The stub
-  is labelled `system_linker_exec` and rings by opening its own binary; AOSP
-  app domains get `x_file_perms` (`execute`, not `open`/`read`) on executable
-  system files. If that open is denied, the inotify doorbell never fires and
-  the transition stalls. This is a policy question to settle on hardware, not
-  something the compiler can catch.
+- **The doorbell depends on OverlayFS and inotify behaviour that is not
+  hardware-tested.** The stub in `upper/su` rings by `open()`ing its own
+  overlaid `/system/bin/su`. Stock SELinux permits that open — the stub is
+  labelled `system_linker_exec`, which is a `system_file_type`, and `domain.te`
+  grants `{ appdomain coredomain }` `r_file_perms` (`open`, which
+  `do_open_execat()` needs for `execve()` anyway). The subtlety is in the
+  kernel: opening a file *through* an overlay notifies the overlay inode, not
+  the upper inode (on 5.10/6.1 `ovl_open_realfile()` → `open_with_fake_path()`
+  keeps the overlay dentry; on 6.18 `backing_file_open()` sets
+  `FMODE_NONOTIFY`), so a bare watch on `upper/su` never fires. `ns_inject()`
+  therefore bind-mounts the real `upper/su` over `/system/bin/su` inside the
+  app's mount namespace, so the app's open reaches the inode the daemon
+  watches. This is reasoned from the kernel sources, not observed on hardware.
 
 ---
 
@@ -324,7 +331,7 @@ Three binaries, no shared library, no build system beyond a Makefile:
 
 | File | Role |
 |---|---|
-| `userspace/daemon/` | `zerosud`: a strictly single-threaded epoll daemon (no threads, no `fork`, no `/proc` scans). ctl socket, `packages.list` cache, logdr spawn monitor, per-uid inotify doorbells, inline mount-namespace overlay injection, and the only code that speaks the ioctl ABI. |
+| `userspace/daemon/` | `zerosud`: a strictly single-threaded epoll daemon (no threads, no `fork`, no `/proc` scans). ctl socket, `packages.list` cache, logdr spawn monitor, per-uid inotify doorbells, inline mount-namespace overlay + bind injection, and the only code that speaks the ioctl ABI. |
 | `userspace/su/zsu_stub.c` | the template `/system/bin/su`: parks two anonymous pipes on fixed descriptors, rings the daemon by opening its own binary, waits for the one-byte ack, then execs `/system/bin/sh`. |
 | `userspace/ctl/zsu_ctl.c` | the orchestrator: `patch`, `allow`, `revoke`, `list`, `status`, `ping`, `shell`. `patch` stamps the SuperKey into the daemon's ELF slot and prints it once. |
 
