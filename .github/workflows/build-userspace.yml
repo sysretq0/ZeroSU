@@ -1,0 +1,45 @@
+name: Build ZeroSU userspace
+
+# Builds the three reference binaries (zerosud, zsu_stub, zsu_ctl) for
+# arm64-v8a with the Android NDK, and uploads them as a single artifact.
+# Userspace is KMI-independent: the same binaries work with every
+# androidN-*-zerosu.ko built by "Build ZeroSU LKM".
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  build-userspace:
+    name: Build userspace (arm64-v8a)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout source code
+      uses: actions/checkout@v4
+
+    - name: Set up Android NDK
+      id: ndk
+      uses: nttld/setup-ndk@v1
+      with:
+        ndk-version: r29
+
+    - name: Build
+      working-directory: userspace
+      env:
+        CC: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang
+      run: |
+        set -euo pipefail
+        "$CC" --version
+        make
+        ls -la zerosud zsu_stub zsu_ctl
+
+    - name: Upload userspace artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: aarch64-userspace
+        path: |
+          userspace/zerosud
+          userspace/zsu_stub
+          userspace/zsu_ctl
+        if-no-files-found: error

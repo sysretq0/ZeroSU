@@ -1,0 +1,38 @@
+name: Build ZeroSU LKM
+
+# Builds zerosu.ko for every supported KMI and uploads each as a downloadable
+# artifact, exactly like KernelSU's build-lkm.yml does for kernelsu.ko.
+#
+# Trigger it from the Actions tab ("Run workflow"). Artifacts appear on the
+# run page as:
+#
+#   aarch64-android12-5.10-zerosu  ->  android12-5.10_zerosu.ko
+#   aarch64-android14-6.1-zerosu   ->  android14-6.1_zerosu.ko
+#   ...
+#
+# Download the one that matches the device's KMI (its `uname -r` prefix).
+# Pushing a v* tag runs release.yml instead, which attaches the same files to
+# a GitHub Release.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  build-lkm:
+    name: ${{ matrix.kmi }}
+    strategy:
+      fail-fast: false
+      matrix:
+        kmi:
+          - android12-5.10
+          - android13-5.10
+          - android13-5.15
+          - android14-5.15
+          - android14-6.1
+          - android15-6.6
+          - android16-6.12
+          - android17-6.18
+    uses: ./.github/workflows/ddk-lkm.yml
+    with:
+      kmi: ${{ matrix.kmi }}

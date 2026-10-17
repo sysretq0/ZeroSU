@@ -1,0 +1,65 @@
+name: Release
+
+# On a v* tag (or a manual run), builds every KMI module and the userspace
+# binaries, then attaches all of them to a GitHub Release so they can be
+# downloaded without logging in:
+#
+#   lkm-android12-5.10_zerosu.ko
+#   lkm-android13-5.10_zerosu.ko
+#   ...
+#   zerosud, zsu_stub, zsu_ctl
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-lkm:
+    uses: ./.github/workflows/build-lkm.yml
+
+  build-userspace:
+    uses: ./.github/workflows/build-userspace.yml
+
+  release:
+    name: Attach artifacts to release
+    needs:
+      - build-lkm
+      - build-userspace
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Collect and rename
+      run: |
+        set -euo pipefail
+        mkdir -p dist
+
+        for d in artifacts/aarch64-*-zerosu; do
+          [ -d "$d" ] || continue
+          kmi="$(basename "$d")"
+          kmi="${kmi#aarch64-}"
+          kmi="${kmi%-zerosu}"
+          ko="$(ls "$d"/*_zerosu.ko)"
+          cp "$ko" "dist/lkm-${kmi}_zerosu.ko"
+        done
+
+        for b in zerosud zsu_stub zsu_ctl; do
+          cp "artifacts/aarch64-userspace/$b" "dist/$b"
+        done
+
+        ls -la dist/
+
+    - name: Publish release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: dist/*
+        generate_release_notes: true

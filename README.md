@@ -314,6 +314,47 @@ make KDIR=/path/to/kernel check      # same as syntax-check.sh
 There is deliberately no fallback that guesses a kernel tree: a module built
 against the wrong headers is worse than no build at all.
 
+### Prebuilt modules, KernelSU-style
+
+`.github/workflows/` mirrors KernelSU's LKM pipeline so the module does not
+have to be built locally at all:
+
+| Workflow | What it does |
+|---|---|
+| `ddk-lkm.yml` | reusable; builds `zerosu.ko` for one KMI inside `ghcr.io/ylarod/ddk-min:<kmi>-<release>` and uploads `aarch64-<kmi>-zerosu` |
+| `build-lkm.yml` | matrix over every supported KMI, calls `ddk-lkm.yml` |
+| `build-userspace.yml` | builds `zerosud`, `zsu_stub`, `zsu_ctl` with the Android NDK |
+| `release.yml` | on a `v*` tag, attaches every `.ko` and the userspace binaries to a GitHub Release |
+
+The DDK container supplies exactly what `make KDIR=…` needs: the matching GKI
+source, a prepared `$KDIR` whose `Module.symvers` carries the device ABI's
+`MODVERSIONS` CRCs, and the AOSP clang toolchain. Building there is what makes
+the module natively correct instead of post-processed:
+
+- `struct module` (and every other config-dependent struct) matches, because
+  `$KDIR` was configured from the same `gki_defconfig`;
+- the `__versions` CRCs come from `$KDIR/Module.symvers`, so nothing has to be
+  harvested out of a device kernel image;
+- clang emits the CFI metadata itself. `kernel/main.c`'s `__cfi_check` shim and
+  the `__cfi_jt_*` slots are compiled *out* whenever `CONFIG_CFI_CLANG` is set,
+  because the kernel's own `module_init()`/`module_exit()` macros and the
+  compiler already provide them (defining them twice is a link error).
+
+To get a module:
+
+1. **Actions → Build ZeroSU LKM → Run workflow**, then download the artifact
+   `aarch64-<kmi>-zerosu` (contains `<kmi>_zerosu.ko`); or
+2. push a tag to attach everything to a Release:
+
+   ```sh
+   git tag v0.1.0
+   git push origin v0.1.0
+   ```
+
+The `.ko` is named by KMI; match it against `uname -r` on the device
+(`5.10.237-android12-9-…` → `android12-5.10`). The userspace artifact is
+KMI-independent.
+
 ### Talking to it from userspace
 
 ```sh

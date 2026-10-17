@@ -1,0 +1,95 @@
+name: Build ZeroSU Kernel Module
+
+# Reusable workflow: builds zerosu.ko for one KMI inside the KernelSU "DDK"
+# (Driver Development Kit) container and uploads it as an artifact.
+#
+# The DDK image ships, for one KMI:
+#   * the matching GKI kernel source            ($KDIR -> /opt/ddk/kdir/$KMI)
+#   * a prepared kernel build dir with the
+#     same .config, generated headers and
+#     Module.symvers as the device              ($KDIR/include, $KDIR/Module.symvers)
+#   * the matching AOSP clang toolchain         (CC=clang, ld.lld, llvm-strip)
+#
+# Building here is what makes the module natively correct on a stock GKI
+# device: struct layouts match (no post-link rewriting), MODVERSIONS CRCs come
+# from the kdir's Module.symvers (no harvested CRCs), and CFI is emitted by
+# clang itself (no __cfi_check shim -- the shim in kernel/main.c is compiled
+# out when CONFIG_CFI_CLANG is set).
+#
+# This mirrors tiann/KernelSU .github/workflows/ddk-lkm.yml (aarch64 path).
+
+on:
+  workflow_call:
+    inputs:
+      kmi:
+        description: 'KMI version, e.g. android12-5.10'
+        required: true
+        type: string
+      ddk_release:
+        description: 'DDK image release tag'
+        required: false
+        default: '20260828'
+        type: string
+  workflow_dispatch:
+    inputs:
+      kmi:
+        description: 'KMI version'
+        required: true
+        default: 'android12-5.10'
+        type: string
+      ddk_release:
+        description: 'DDK image release tag'
+        required: false
+        default: '20260828'
+        type: string
+
+jobs:
+  build-zerosu-ko:
+    name: Build zerosu.ko for ${{ inputs.kmi }}
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ylarod/ddk-min:${{ inputs.kmi }}-${{ inputs.ddk_release }}
+      options: --privileged
+
+    steps:
+    - name: Checkout source code
+      uses: actions/checkout@v4
+
+    - name: Build zerosu.ko
+      run: |
+        set -euo pipefail
+
+        # The workspace is bind-mounted from the runner and is owned by a
+        # different uid than the container user; git refuses to work otherwise.
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+        echo "KDIR=$KDIR"
+        echo "CC=$CC"
+        clang --version
+
+        cd kernel
+        echo "=== Building zerosu.ko for KMI: ${{ inputs.kmi }} ==="
+        make KDIR="$KDIR" CC=clang
+
+        echo "=== Module info ==="
+        modinfo zerosu.ko || true
+
+        OUT_DIR="$GITHUB_WORKSPACE/out/aarch64"
+        mkdir -p "$OUT_DIR"
+        OUTPUT_NAME="${{ inputs.kmi }}_zerosu.ko"
+        cp zerosu.ko "$OUT_DIR/$OUTPUT_NAME"
+
+        # Drop the .dwo debug trailer that the LTO/CFI toolchain leaves behind;
+        # the loader rejects a module with an oversized/foreign debug section.
+        llvm-strip -d "$OUT_DIR/$OUTPUT_NAME"
+
+        echo "Copied to: $OUT_DIR/$OUTPUT_NAME"
+        ls -la "$OUT_DIR/$OUTPUT_NAME"
+        echo "Size: $(du -h "$OUT_DIR/$OUTPUT_NAME" | cut -f1)"
+
+    - name: Upload zerosu.ko artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: aarch64-${{ inputs.kmi }}-zerosu
+        path: out/aarch64/${{ inputs.kmi }}_zerosu.ko
+        if-no-files-found: error
