@@ -416,8 +416,9 @@ static int doorbell_cb(pid_t pid, void *arg)
 		return 0;
 	}
 
-	/* fd/3 is the stub's request pipe read end. */
-	fd = openat(dfd, "fd/3", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+	/* fd 3 is the stub's request pipe read end. */
+	snprintf(path, sizeof(path), "fd/%d", ZSU_STUB_REQ_RD_FD);
+	fd = openat(dfd, path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	if (fd < 0) {
 		close(dfd);
 		return 0;
@@ -443,8 +444,9 @@ static int doorbell_cb(pid_t pid, void *arg)
 		return 0;
 	}
 
-	/* fd/5 is the stub's ack pipe write end; the stub reads fd/4. */
-	fd = openat(dfd, "fd/5", O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+	/* fd 5 is the stub's ack pipe write end; the stub reads fd 4. */
+	snprintf(path, sizeof(path), "fd/%d", ZSU_STUB_ACK_WR_FD);
+	fd = openat(dfd, path, O_WRONLY | O_NONBLOCK | O_CLOEXEC);
 	if (fd >= 0) {
 		const uint8_t ack = ZSU_RDV_OK;
 

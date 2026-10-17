@@ -373,7 +373,9 @@ static int do_patch(const char *path, const char *hex)
 		return 1;
 	}
 
-	for (i = 0; i + ZSU_PATCH_MAGIC_LEN <= st.st_size; i++) {
+	/* Accept only a slot whose magic and 64-byte key area both fit. */
+	for (i = 0;
+	     i + ZSU_PATCH_MAGIC_LEN + ZSU_PATCH_KEY_LEN <= st.st_size; i++) {
 		if (!memcmp(img + i, ZSU_PATCH_MAGIC, ZSU_PATCH_MAGIC_LEN)) {
 			off = i;
 			count++;

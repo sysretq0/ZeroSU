@@ -172,10 +172,14 @@ int policy_pkg_appid(const char *pkg, uint32_t *appid)
 int policy_pkg_uid(const char *pkg, uint32_t user, uid_t *uid)
 {
 	struct pkg_ent *e = pkg_lookup(pkg);
+	uint64_t v;
 
 	if (!e)
 		return -ENOENT;
-	*uid = (uid_t)(user * 100000u + (e->uid % 100000u));
+	v = (uint64_t)user * 100000u + (e->uid % 100000u);
+	if (v > 0xffffffffu)
+		return -ERANGE;
+	*uid = (uid_t)v;
 	return 0;
 }
 
@@ -226,7 +230,8 @@ int policy_refresh_packages(void)
 			continue;
 		errno = 0;
 		v = strtoul(uid, &end, 10);
-		if (end == uid || errno || v == 0)
+		if (end == uid || errno || v == 0 || v > 0xfffffffful ||
+		    uid[0] == '-')
 			continue;
 		pkg_insert(name, (uint32_t)v);
 		seen++;
@@ -418,18 +423,39 @@ static void wd_insert(int wd, uid_t uid)
 
 static void wd_remove(int wd)
 {
-	size_t j;
+	struct wd_ent *keep;
+	size_t keep_n = 0, i, cap;
 
 	if (!wd_tab)
 		return;
-	j = hash_u32((uint32_t)wd) & (wd_cap - 1);
-	while (wd_tab[j].used) {
-		if (wd_tab[j].wd == wd)
-			break;
-		j = (j + 1) & (wd_cap - 1);
+
+	/*
+	 * Same reason as uid_remove(): open addressing means a cleared slot
+	 * would orphan the rest of its probe chain. Rebuild instead.
+	 */
+	cap = wd_cap;
+	keep = malloc(cap * sizeof(*keep));
+	if (!keep) {
+		size_t j = hash_u32((uint32_t)wd) & (cap - 1);
+
+		while (wd_tab[j].used && wd_tab[j].wd != wd)
+			j = (j + 1) & (cap - 1);
+		if (wd_tab[j].used) {
+			wd_tab[j].used = false;
+			wd_count--;
+		}
+		return;
 	}
-	if (wd_tab[j].used)
-		wd_tab[j].used = false, wd_count--;
+
+	for (i = 0; i < cap; i++)
+		if (wd_tab[i].used && wd_tab[i].wd != wd)
+			keep[keep_n++] = wd_tab[i];
+
+	memset(wd_tab, 0, cap * sizeof(*wd_tab));
+	wd_count = 0;
+	for (i = 0; i < keep_n; i++)
+		wd_insert(keep[i].wd, (uid_t)keep[i].uid);
+	free(keep);
 }
 
 int policy_doorbell_uid(int wd, uid_t *uid)
@@ -452,7 +478,20 @@ int policy_doorbell_uid(int wd, uid_t *uid)
 /* IN_IGNORED: the kernel dropped the watch (file replaced or unmounted). */
 void policy_forget_wd(int wd)
 {
-	wd_remove(wd);
+	uid_t uid;
+
+	/*
+	 * IN_IGNORED can be the tail of our own revoke (inotify_rm_watch) or
+	 * the kernel dropping a watch on its own. If the uid is still granted,
+	 * re-arm it: the kernel may already have handed this same wd number to
+	 * a re-allow, and merely removing it would leave a live grant with no
+	 * doorbell (a fail-closed stall).
+	 */
+	if (policy_doorbell_uid(wd, &uid) == 0) {
+		wd_remove(wd);
+		if (policy_uid_allowed(uid))
+			(void)policy_arm_doorbell(uid);
+	}
 }
 
 /* ------------------------------------------------------------------ */
@@ -550,16 +589,41 @@ int policy_stage_uid(uid_t uid)
 	if (zsu_set_selinux_label(upper, "u:object_r:system_file:s0"))
 		zsu_warn("label %s (continuing)", upper);
 
-	rc = zsu_copy_file(ZSU_STUB_BIN, su, 0755);
-	if (rc)
-		return rc;
+	/*
+	 * Install the stub via a temp name + rename. Writing upper/su in place
+	 * returns ETXTBSY while the stub is executing (re-staging a live grant)
+	 * and a partial write would leave a truncated su. rename() is atomic and
+	 * never disturbs the inode a running process already holds.
+	 */
+	{
+		char tmp[ZSU_PATH_MAX];
+		int n = snprintf(tmp, sizeof(tmp), "%s.tmp", su);
 
-	if (chown(su, 0, 0))
-		zsu_warn("chown %s: %s", su, strerror(errno));
-	if (chmod(su, 0755))
-		return -errno;
-	if (zsu_set_selinux_label(su, "u:object_r:system_linker_exec:s0"))
-		zsu_warn("label %s (continuing)", su);
+		if (n < 0 || (size_t)n >= sizeof(tmp))
+			return -ENAMETOOLONG;
+
+		rc = zsu_copy_file(ZSU_STUB_BIN, tmp, 0755);
+		if (rc)
+			return rc;
+
+		if (chown(tmp, 0, 0))
+			zsu_warn("chown %s: %s", tmp, strerror(errno));
+		if (chmod(tmp, 0755)) {
+			int e = errno;
+
+			unlink(tmp);
+			return -e;
+		}
+		if (zsu_set_selinux_label(tmp,
+					  "u:object_r:system_linker_exec:s0"))
+			zsu_warn("label %s (continuing)", tmp);
+		if (rename(tmp, su)) {
+			int e = errno;
+
+			unlink(tmp);
+			return -e;
+		}
+	}
 
 	rc = policy_arm_doorbell(uid);
 	if (rc)
@@ -595,16 +659,22 @@ int policy_arm_doorbell(uid_t uid)
 void policy_disarm_doorbell(uid_t uid)
 {
 	size_t i;
+	int wd = -1;
 
 	if (inotify_fd < 0 || !wd_tab)
 		return;
 	for (i = 0; i < wd_cap; i++) {
 		if (wd_tab[i].used && wd_tab[i].uid == (uint32_t)uid) {
-			inotify_rm_watch(inotify_fd, wd_tab[i].wd);
-			wd_remove(wd_tab[i].wd);
-			return;
+			wd = wd_tab[i].wd;
+			break;
 		}
 	}
+	if (wd < 0)
+		return;
+
+	/* Collect first: wd_remove() rebuilds the table. */
+	inotify_rm_watch(inotify_fd, wd);
+	wd_remove(wd);
 }
 
 /* ------------------------------------------------------------------ */
@@ -672,11 +742,14 @@ int policy_restage_all(void)
 int policy_allow_uid(uid_t uid)
 {
 	int rc;
+	bool existed = policy_uid_allowed(uid) != 0;
 
 	uid_insert(uid);
 	rc = policy_stage_uid(uid);
 	if (rc) {
-		uid_remove(uid);
+		/* Only drop the grant if this call is what created it. */
+		if (!existed)
+			uid_remove(uid);
 		return rc;
 	}
 	policy_save_grants();
@@ -685,6 +758,15 @@ int policy_allow_uid(uid_t uid)
 
 int policy_revoke_uid(uid_t uid)
 {
+	/*
+	 * Never act on a uid we never granted. ctl.sock is reachable by adb
+	 * shell and REVOKE needs no SuperKey, so an unconditional
+	 * zsu_cgroup_kill() would let the shell terminate any uid's cgroup -
+	 * including system_server (uid 1000).
+	 */
+	if (!policy_uid_allowed(uid))
+		return -ENOENT;
+
 	uid_remove(uid);
 	policy_disarm_doorbell(uid);
 	policy_save_grants();
