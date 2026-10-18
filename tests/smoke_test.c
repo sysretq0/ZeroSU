@@ -65,12 +65,14 @@ int main(int argc, char **argv)
 {
 	struct zsu_msg buf;
 	const bool want_su = (argc > 1 && !strcmp(argv[1], "su"));
+	const bool want_hold = (argc > 1 && !strcmp(argv[1], "hold"));
 	const bool want_key = (argc > 2);
 	int fd = -1;
 	long r;
 
-	if (want_key && !want_su) {
-		fprintf(stderr, "usage: %s [su [key]]\n", basename_of(argv[0]));
+	if ((want_key && !want_su) || (want_su && want_hold)) {
+		fprintf(stderr, "usage: %s [su [key] | hold]\n",
+			basename_of(argv[0]));
 		return 2;
 	}
 
@@ -108,6 +110,18 @@ int main(int argc, char **argv)
 		fprintf(stderr, "ABI mismatch\n");
 		close(fd);
 		return 1;
+	}
+
+	if (want_hold) {
+		/*
+		 * Keep the session fd open so the caller can observe the
+		 * module refcount: with this running, rmmod must fail with
+		 * EBUSY; killing this process makes rmmod succeed again.
+		 */
+		printf("holding session fd=%d for 120s\n", fd);
+		sleep(120);
+		close(fd);
+		return 0;
 	}
 
 	if (want_key) {

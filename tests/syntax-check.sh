@@ -253,7 +253,7 @@ if awk '
 function flush() {
 	if (op != "") {
 		need = (op == "ZSU_CTL_ALLOW" || op == "ZSU_CTL_REVOKE" ||
-			op == "ZSU_CTL_SHELL")
+			op == "ZSU_CTL_SHELL" || op == "ZSU_CTL_STOP")
 		has = (body ~ /superkey_ok\(/)
 		if (need && !has)  { print "  FAIL: " op " has no superkey_ok()"; bad = 1 }
 		if (!need && has)  { print "  FAIL: " op " requires the key"; bad = 1 }
