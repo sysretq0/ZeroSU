@@ -45,6 +45,9 @@
 
 static int listen_fd = -1;
 
+/* Main loop reads this after every drain; set only by ZSU_CTL_STOP. */
+volatile sig_atomic_t zsu_stop_requested;
+
 /* ------------------------------------------------------------------ */
 /* control socket                                                      */
 /* ------------------------------------------------------------------ */
@@ -391,6 +394,24 @@ int broker_handle(int cfd)
 		resp.status = 0;
 		resp.uid = 0;
 		snprintf(resp.msg, sizeof(resp.msg), "OK");
+		break;
+
+	case ZSU_CTL_STOP:
+		/*
+		 * Shutting the daemon down releases its session fd, which is
+		 * the module reference that makes rmmod return -EBUSY; that
+		 * makes STOP the SuperKey-gated half of the module-reload
+		 * flow: stop the daemon, rmmod/insmod, restart it.
+		 */
+		if (!superkey_ok(req.key)) {
+			reply_err(&resp, -EACCES, "stop: bad SuperKey");
+			break;
+		}
+		resp.status = 0;
+		resp.uid = 0;
+		snprintf(resp.msg, sizeof(resp.msg),
+			 "stopping: close your session fd before rmmod");
+		zsu_stop_requested = 1;
 		break;
 
 	default:

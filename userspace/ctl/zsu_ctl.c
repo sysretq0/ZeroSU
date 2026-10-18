@@ -43,6 +43,8 @@ static void usage(void)
 		"       zsu_ctl revoke <package|uid> [hex_key_128]\n"
 		"       zsu_ctl list | status | ping\n"
 		"       zsu_ctl shell [hex_key_128]\n"
+		"       zsu_ctl stop <hex_key_128>   (SuperKey; clean daemon exit,\n"
+		"                                    the release half of module reload)\n"
 		"\n"
 		"The SuperKey may also come from $ZSU_KEY, or from the slot in a\n"
 		"readable daemon binary named by $ZSU_ZEROSUD.\n");
@@ -464,6 +466,46 @@ static int do_patch(const char *path, const char *hex)
 
 /* ------------------------------------------------------------------ */
 
+/*
+ * Module-reload flow, daemon half: prove the SuperKey, ask the daemon to
+ * exit. Once it does, its session fd closes and the module reference
+ * install_work() took goes away, so `rmmod zerosu` succeeds instead of
+ * returning -EBUSY. Re-insmod and restart zerosud via its init script -
+ * zsu_ctl stop deliberately does not restart anything, because spawning
+ * the daemon is the privilege of whatever runs at boot, not of shell.
+ */
+static int do_stop(int argc, char **argv)
+{
+	uint8_t key[ZSU_PATCH_KEY_LEN];
+	struct zsu_ctl_req req;
+	struct zsu_ctl_resp resp;
+	int rc;
+
+	rc = load_superkey(argc > 0 ? argv[0] : NULL, key, "stop");
+	if (rc)
+		return rc;
+
+	memset(&req, 0, sizeof(req));
+	req.op = ZSU_CTL_STOP;
+	memcpy(req.key, key, sizeof(key));
+	zsu_wipe(key, sizeof(key));
+
+	rc = ctl_call(&req, &resp);
+	if (rc) {
+		fprintf(stderr, "zsu_ctl: %s\n", strerror(-rc));
+		return 1;
+	}
+	if (resp.status) {
+		fprintf(stderr, "zsu_ctl: %s\n",
+			resp.msg[0] ? resp.msg : strerror(-resp.status));
+		return 1;
+	}
+	printf("%s\n", resp.msg);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+
 int main(int argc, char **argv)
 {
 	const char *cmd;
@@ -499,6 +541,8 @@ int main(int argc, char **argv)
 		return do_simple(ZSU_CTL_PING);
 	if (!strcmp(cmd, "shell"))
 		return do_shell(argc - 2, argv + 2);
+	if (!strcmp(cmd, "stop"))
+		return do_stop(argc - 2, argv + 2);
 
 	usage();
 	return 2;

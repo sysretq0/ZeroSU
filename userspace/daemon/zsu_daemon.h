@@ -16,11 +16,24 @@
 #define ZSU_DAEMON_H
 
 #include <stdbool.h>
+#include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
 
 #include "zsu_ipc.h"
+
+/* ------------------------------------------------------------------ */
+/* main.c                                                              */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Set by the broker's ZSU_CTL_STOP handler under SuperKey proof. The epoll
+ * loop checks it every time the listen fd drains; STOP then takes the same
+ * path as a caught signal ("stopped" log, clean exit), which releases the
+ * daemon's session fd - the module reference that keeps rmmod -EBUSY.
+ */
+extern volatile sig_atomic_t zsu_stop_requested;
 
 /* ------------------------------------------------------------------ */
 /* util.c                                                              */

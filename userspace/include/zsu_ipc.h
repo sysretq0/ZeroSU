@@ -100,6 +100,7 @@ enum zsu_ctl_op {
 	ZSU_CTL_REVOKE,
 	ZSU_CTL_LIST,
 	ZSU_CTL_SHELL,
+	ZSU_CTL_STOP,			/* SuperKey-gated: daemon exits cleanly */
 };
 
 struct zsu_ctl_req {

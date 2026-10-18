@@ -339,6 +339,8 @@ int main(int argc, char **argv)
 			switch (kind) {
 			case EP_LISTEN:
 				drain_clients();
+				if (zsu_stop_requested)
+					goto done;
 				break;
 			case EP_INOTIFY:
 				drain_inotify();
