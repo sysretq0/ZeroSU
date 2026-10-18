@@ -149,6 +149,7 @@ static inline void unregister_kprobe(struct kprobe *kp) { (void)kp; }
 #define ENOTTY 25
 #define EIO 5
 #define module_param(_n, _t, _p)
+#define module_param_named(_n, _v, _t, _p)
 #define module_init(_f)	static void *__zsu_modinit_##_f(void) { }
 #define module_exit(_f)	static void *__zsu_modexit_##_f(void) { }
 #define MODULE_LICENSE(_s)	MODULE_INFO_STR(_s)
@@ -280,6 +281,7 @@ static inline struct cred *current_cred(void) { return NULL; }
 
 /* --- fds, files, anon inode, task_work: used by gateway.c --- */
 typedef struct { int counter; } atomic_t;
+#define ATOMIC_INIT(_i)	{ _i }
 #define __user
 #define O_RDWR	0x0002
 #define O_CLOEXEC 0x80000
@@ -332,6 +334,9 @@ static inline int atomic_dec(atomic_t *v) { (void)v; return 0; }
 static inline int atomic_dec_and_test(atomic_t *v) { (void)v; return 1; }
 static inline int atomic_inc(atomic_t *v) { (void)v; return 0; }
 static inline int atomic_read(const atomic_t *v) { (void)v; return 0; }
+static inline int atomic_xchg(atomic_t *v, int n) { (void)v; (void)n; return 0; }
+static inline int try_module_get(struct module *mod) { (void)mod; return 1; }
+static inline void module_put(struct module *mod) { (void)mod; }
 #define unlikely(_x)	(_x)
 #define likely(_x)	(_x)
 static inline unsigned long copy_from_user(void *k, const void __user *u, size_t n)
@@ -343,4 +348,6 @@ static inline int copy_to_user(void __user *u, const void *k, size_t n)
 extern struct task_struct *current;
 extern struct mm_struct *current_mm;
 
-#endif /* _ZSU_STUB_H */#define BIT(n) (1UL << (n))
+#define BIT(n)	(1UL << (n))
+
+#endif /* _ZSU_STUB_H */

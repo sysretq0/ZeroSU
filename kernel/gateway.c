@@ -105,6 +105,14 @@ int zsu_gateway_syms_init(void)
  *     leaves no orphaned fd behind. The failure path does put_unused_fd() +
  *     fput(), and that fput() runs zerosu_session_release(), which frees the
  *     session and drops live_sessions for us.
+ *   - anon_inode_getfile() does not pin fops->owner on our behalf, and this
+ *     module's entry point is a kprobe, not an opened device node, so VFS
+ *     never took a reference when the fd was minted. try_module_get() below
+ *     is therefore the only thing standing between rmmod and the session's
+ *     fops living in this module's .text; the module reference moves into
+ *     the struct file at fd_install() and __fput() -> fops_put() releases it
+ *     on close. There is exactly one try_module_get() per session, so the
+ *     module refcount and the last session fd's refcount are 1:1.
  *   - the inflight_tw decrement is the final statement, after kfree(tw), so
  *     the module can never be told "drained" while its own text is still
  *     running.
@@ -141,10 +149,19 @@ static void __nocfi zerosu_install_work(struct callback_head *work)
 		goto out;
 	}
 
+	if (!try_module_get(THIS_MODULE)) {
+		put_unused_fd(fd);
+		atomic_dec(&live_sessions);
+		kfree(ctx);
+		goto out;
+	}
+
 	file = anon_inode_getfile("[zerosu]", &zerosu_session_fops, ctx,
 				  O_RDWR | O_CLOEXEC);
 	if (IS_ERR(file)) {
 		put_unused_fd(fd);
+		/* No struct file exists yet, so fput() cannot do it later. */
+		module_put(THIS_MODULE);
 		atomic_dec(&live_sessions);
 		kfree(ctx);
 		goto out;
@@ -154,7 +171,11 @@ static void __nocfi zerosu_install_work(struct callback_head *work)
 		/*
 		 * fput() drops the only reference to file, which runs
 		 * zerosu_session_release() -> kfree(ctx) and
-		 * atomic_dec(&live_sessions). Do not free ctx here.
+		 * atomic_dec(&live_sessions), and the later __fput() ->
+		 * fops_put() drops the module reference this function took
+		 * above. Do not free ctx here, and do not module_put() here:
+		 * once the struct file exists it owns the module reference,
+		 * and a manual put next to the automatic one is an underflow.
 		 */
 		put_unused_fd(fd);
 		fput(file);
