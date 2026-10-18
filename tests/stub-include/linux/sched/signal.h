@@ -13,4 +13,10 @@
 
 #include "../../stub.h"
 
+static inline int thread_group_empty(struct task_struct *p)
+{
+	(void)p;
+	return 1;
+}
+
 #endif /* _STUB_LINUX_SCHED_SIGNAL_H */

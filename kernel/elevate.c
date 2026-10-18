@@ -26,6 +26,7 @@
 #include <linux/module.h>
 #include <linux/pid.h>
 #include <linux/sched.h>
+#include <linux/sched/signal.h>
 #include <linux/slab.h>
 #include <linux/sched/user.h>
 #include <linux/uidgid.h>
@@ -337,6 +338,28 @@ int __nocfi zerosu_elevate_task(pid_t pid_nr, u32 mode, u64 start_time)
 	if ((u64)nsec_to_clock_t(tsk->start_boottime) != start_time) {
 		put_task_struct(tsk);
 		return -ESRCH;
+	}
+
+	/*
+	 * ELEVATE_TASK is defined for exactly one target: the parked
+	 * single-threaded su-stub rendezvous, waiting in poll() on its ack
+	 * fd while the daemon operates on it. Swap-and-put underneath a task
+	 * running on another CPU is safe only for such a task: there is no
+	 * concurrent execution on the target, so its (now stale) subjective
+	 * cred pointer cannot be dereferenced by a syscall in flight on it,
+	 * and no thread group member is left holding a reference it did not
+	 * take. Turn that convention into a kernel-enforced invariant:
+	 * multithreaded and thread-group-leading targets are refused rather
+	 * than trusted.
+	 *
+	 * A future caller that legitimately needs to elevate a live
+	 * multithreaded process must redesign this contract (defer the old
+	 * references through an RCU callback and synchronize per-thread),
+	 * not remove this guard.
+	 */
+	if (!thread_group_empty(tsk)) {
+		put_task_struct(tsk);
+		return -EPERM;
 	}
 
 	rc = do_elevate(tsk, mode);
