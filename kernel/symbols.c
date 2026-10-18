@@ -53,31 +53,56 @@ static int zsu_kp_nop(struct kprobe *kp, struct pt_regs *regs)
 	return 0;
 }
 
+/*
+ * One kprobe bootstrap attempt: reset @kp, point it at @name, register. On
+ * success @kp holds the resolved address; on failure returns the register
+ * error and @kp is left unregistered.
+ */
+static int zsu_kprobe_bootstrap(struct kprobe *kp, const char *name)
+{
+	memset(kp, 0, sizeof(*kp));
+	kp->pre_handler = zsu_kp_nop;
+	kp->symbol_name = name;
+	return register_kprobe(kp);
+}
+
+static void zsu_kprobe_release(struct kprobe *kp)
+{
+	unregister_kprobe(kp);
+}
+
 int zerosu_symbols_init(void)
 {
+	static const char base[] = "kallsyms_lookup_name";
+	static const char thunk[] = "kallsyms_lookup_name" ZSU_CFI_JT_SUFFIX;
 	struct kprobe kp;
 	int rc;
 
-	memset(&kp, 0, sizeof(kp));
-	kp.pre_handler = zsu_kp_nop;
-	kp.symbol_name = "kallsyms_lookup_name";
-
-	rc = register_kprobe(&kp);
+	/*
+	 * On CFI_CLANG kernels the *thunk* is the only address the kernel's
+	 * __cfi_check() will accept us calling through a function pointer;
+	 * see ZSU_RESOLVE_JT_FIRST in compat.h. Probing the thunk also works
+	 * (it is a plain function whose first instruction branches to the
+	 * body). kCFI (6.1+) and CFI-less builds have no thunk, so the bare
+	 * name is tried there first and the thunk as fallback. The choice is
+	 * a constant selected by build config, so both arms are real,
+	 * compiled code - no #ifdef lives here.
+	 */
+	if (ZSU_RESOLVE_JT_FIRST)
+		rc = zsu_kprobe_bootstrap(&kp, thunk);
+	else
+		rc = zsu_kprobe_bootstrap(&kp, base);
+	if (rc)
+		rc = zsu_kprobe_bootstrap(&kp,
+			ZSU_RESOLVE_JT_FIRST ? base : thunk);
 	if (rc) {
-		/* CFI jump table kernels expose a thunk with this name */
-		memset(&kp, 0, sizeof(kp));
-		kp.pre_handler = zsu_kp_nop;
-		kp.symbol_name = "kallsyms_lookup_name" ZSU_CFI_JT_SUFFIX;
-		rc = register_kprobe(&kp);
-		if (rc) {
-			pr_err(ZSU_LOG_PREFIX "kallsyms_lookup_name not reachable: %d\n",
-			       rc);
-			return rc;
-		}
+		pr_err(ZSU_LOG_PREFIX "kallsyms_lookup_name not reachable: %d\n",
+		       rc);
+		return rc;
 	}
 
 	zsu_kallsyms_lookup_name = (void *)kp.addr;
-	unregister_kprobe(&kp);
+	zsu_kprobe_release(&kp);
 
 	/*
 	 * The probe is gone before any lookup runs, but a breakpoint may
@@ -108,8 +133,26 @@ void zerosu_symbols_exit(void)
 }
 
 /*
- * Look a name up, transparently retrying the CFI jump table alias. Returns
- * NULL for "not found"; never a partially valid answer.
+ * Look a name up, transparently preferring the CFI jump-table thunk on
+ * old-CFI kernels (and transparently retrying the thunk alias everywhere
+ * else, so a base name that only exists as a thunk still resolves).
+ *
+ * The order is fixed by the kernel build knob, not by version:
+ *
+ *   CONFIG_CFI_CLANG (5.10/5.15): the kernel's __cfi_check() only accepts
+ *     target addresses that are jump-table slots, so a raw body address
+ *     from kallsyms panics on the first indirect call through it. The
+ *     thunk's address IS in the check table, so it wins. Data symbols
+ *     never have a thunk and fall through to the base name.
+ *
+ *   kCFI (6.1+, CONFIG_CFI): there are no thunks - the u32 type hash is
+ *     stored immediately before the function body and checked against the
+ *     CALLER's pointer type - so raw body addresses are what it wants, and
+ *     the alias lookup simply misses.
+ *
+ *   no CFI: no checks at all; the alias misses and the base name wins.
+ *
+ * Returns NULL for "not found"; never a partially valid answer.
  */
 void *zerosu_resolve_raw(const char *name)
 {
@@ -119,15 +162,14 @@ void *zerosu_resolve_raw(const char *name)
 	if (!zsu_kallsyms_lookup_name || !name)
 		return NULL;
 
-	addr = (void *)zsu_kallsyms_lookup_name(name);
-	if (addr)
-		return addr;
-
 	if (snprintf(alias, sizeof(alias), "%s%s", name, ZSU_CFI_JT_SUFFIX) <
-	    (int)sizeof(alias))
+	    (int)sizeof(alias)) {
 		addr = (void *)zsu_kallsyms_lookup_name(alias);
+		if (addr)
+			return addr;
+	}
 
-	return addr;
+	return (void *)zsu_kallsyms_lookup_name(name);
 }
 
 int zerosu_resolve(const char *name, void **out)

@@ -129,7 +129,7 @@ static inline char *kstrdup(const char *s, gfp_t f)
 struct pt_regs {
 	unsigned long regs[32];		/* arm64 */
 	unsigned long parm1;		/* PT_REGS_PARM1 on x86/arm64/riscv */
-	unsigned long di, si, dx, cx, r8, r9;		/* x86_64 */
+	unsigned long di, si, dx, cx, r10, r8, r9;		/* x86_64 */
 	unsigned long a0, a1, a2, a3, a4, a5;		/* riscv */
 };
 #define PT_REGS_PARM1(_r)	((_r)->parm1)

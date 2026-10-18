@@ -65,12 +65,21 @@
 /* ========================================================================
  * Version anchors
  *
- * Anchor points that were verified, not guessed:
+ * Anchor points that were verified, not guessed, against
+ * sysretq0/android-kernel-common (re-verified 2026-10 against the live
+ * -lts branch heads):
  *  - >= 6.6  security_context_str_to_sid() dropped its leading
  *            'struct selinux_state *state' argument.
  *  - >= 6.6  struct selinux_state lost 'checkreqprot' and 'avc'.
  *  - >= 6.18 struct selinux_state lost the android_netlink_* bools.
- *  - >= 6.12 __POLICYDB_CAP_MAX grew 8 -> 9, >= 6.18 grew to 14.
+ *  - >= 6.12 __POLICYDB_CAP_MAX grew 8 -> 9; >= 6.18 grew to 12 (the
+ *            netlink feature became POLICYDB_CAP_NETLINK_XPERM,
+ *            plus FUNCTIONFS_SECLABEL and MEMFD_CLASS).
+ *  - >= 6.18 struct policydb LOST the android_netlink_route/getneigh
+ *            leading ints (same feature moved into policycaps), so the
+ *            mirror must shed 8 bytes of leading padding as well.
+ *  - the kernel is CFI-CLANG (jump-table based) up to 5.15 and kCFI
+ *            (hash-in-front-of-function) from 6.1 on; see ZSU_RESOLVE_JT_FIRST.
  *
  * Plain upstream 6.2..6.5 is not a GKI target; the 6.1/6.6 boundary is used
  * because those are the branches that actually ship.
@@ -81,14 +90,53 @@
 #define ZSU_SELINUX_STATE_HAS_AVC           1
 #define ZSU_SELINUX_STATE_HAS_ANDROID_BOOLS 1
 #define ZSU_POLICYCAP_MAX                   8
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
-#define ZSU_SELINUX_STATE_HAS_ANDROID_BOOLS 1
-#define ZSU_POLICYCAP_MAX                   8
+#define ZSU_POLICYDB_HAS_NETLINK_INTS       1
 #elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
+/* 6.6..6.12: checkreqprot/avc gone, android netlink bools kept.
+ * policycap is 9 from 6.12 (USERSPACE_INITIAL_CONTEXT), 8 before. */
 #define ZSU_SELINUX_STATE_HAS_ANDROID_BOOLS 1
-#define ZSU_POLICYCAP_MAX                   9
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
+#define ZSU_POLICYCAP_MAX                   8
 #else
-#define ZSU_POLICYCAP_MAX                  14
+#define ZSU_POLICYCAP_MAX                   9
+#endif
+#define ZSU_POLICYDB_HAS_NETLINK_INTS       1
+#else
+/* 6.18: android bools gone; policycap is 12. Verified in
+ * security/selinux/include/security.h on android17-6.18-lts. */
+#define ZSU_POLICYDB_HAS_NETLINK_INTS       0
+#define ZSU_POLICYCAP_MAX                  12
+#endif
+
+/*
+ * An undefined macro evaluates to 0 inside #if, so a bucket that forgets to
+ * define ZSU_POLICYDB_HAS_NETLINK_INTS silently selects the 6.18 layout for
+ * an older kernel while the asserts below stay self-consistent with the
+ * (wrong) mirror. Force the definition to be explicit in every bucket.
+ */
+#if !defined(ZSU_POLICYDB_HAS_NETLINK_INTS)
+#error "zsu: ZSU_POLICYDB_HAS_NETLINK_INTS must be defined in every version bucket"
+#endif
+#if !defined(ZSU_POLICYCAP_MAX)
+#error "zsu: ZSU_POLICYCAP_MAX must be defined in every version bucket"
+#endif
+
+/*
+ * Old-Clang CFI (CONFIG_CFI_CLANG, 5.10/5.15) checks an indirect call by
+ * asking the target's owner for a *jump-table slot*: a raw function-body
+ * address - exactly what kallsyms_lookup_name hands back - fails the kernel's
+ * __cfi_check() and panics ("CFI failure"). Every public kernel function has
+ * a '<name>.cfi_jt' thunk whose address IS in the check table, so on those
+ * kernels resolution must prefer the thunk. kCFI (6.1+, CONFIG_CFI) stores
+ * the type hash before the function body instead and has no jump tables, so
+ * the body address is what it wants (and .cfi_jt symbols do not exist there).
+ * Preferring an alias that does not exist falls through to the body on every
+ * other kernel, which keeps this a one-way choice with no runtime cost.
+ */
+#if defined(CONFIG_CFI_CLANG)
+#define ZSU_RESOLVE_JT_FIRST 1
+#else
+#define ZSU_RESOLVE_JT_FIRST 0
 #endif
 
 /* selinuxfs-era inlines dropped in 6.6 (see table in sepolicy.c). */
@@ -269,17 +317,21 @@ struct cond_bool_datum {
 
 struct policydb {
 	int mls_enabled;
+#if ZSU_POLICYDB_HAS_NETLINK_INTS
 	/*
-	 * Android's policydb carries its two netlink policy flags *here*,
-	 * ahead of the symbol tables (and again, as bools, in
-	 * struct selinux_state). They are plain ints and unconditional in the
-	 * GKI 5.10..6.18 header, but they shift every offset below by 8
-	 * bytes. Dropping them is not a cosmetic mistake: the sanity check
-	 * still passes (it reads symtab[3].table.nel, which tracks nprim)
-	 * and then symtab_search() dereferences a garbage hashtab -> panic.
+	 * Android carries its two netlink policy ints *here*, ahead of the
+	 * symbol tables, up to and including 6.12. On 6.18 the feature became
+	 * POLICYDB_CAP_NETLINK_XPERM and both ints were REMOVED from the
+	 * struct (verified against android17-6.18-lts policydb.h). Keeping
+	 * them on 6.18 would shift every offset below by 8 and turn the
+	 * layout check from "invalid" into "wild read", which is exactly how
+	 * the android_netlink pair was dropped once before: the sanity check
+	 * still passed (it reads symtab[3].table.nel, which tracks nprim)
+	 * and then symtab_search() dereferenced a garbage hashtab -> panic.
 	 */
 	int android_netlink_route;
 	int android_netlink_getneigh;
+#endif
 
 	/* symbol tables */
 	struct symtab symtab[ZSU_SYM_NUM];
@@ -427,58 +479,73 @@ static_assert(offsetof(struct selinux_policy, policydb) == 8,
 
 /*
  * policydb offsets, pinned field by field. The mirrored struct is
- * version independent (5.10 .. 6.18 all declare the same fields in the same
- * order), but a *missing* field is invisible to a size check and shifts every
- * offset below it. That is exactly how the android_netlink_route/getneigh
- * pair was dropped once: the layout check still passed and symtab_search()
- * then walked a garbage hashtab. These asserts make a dropped field a build
- * error. Values are LP64 (the only GKI word size).
+ * version independent *apart from the leading android_netlink ints*, which
+ * vanish on 6.18 (see above). That is a -8 shift for every offset below
+ * them, and it is exactly the shape of bug that slipped through a plain
+ * size check before (the pair was dropped once by accident), so the order
+ * as well as the shift is pinned: every assert is expressed as
+ * ZSU_POLICYDB_BASE + <tail offset>, where the tail part must be identical
+ * between the two regimes or the struct call below fires. Values are
+ * LP64 (the only GKI word size).
  */
-static_assert(sizeof(struct policydb) == 576, "zsu: policydb size drift");
-static_assert(offsetof(struct policydb, symtab) == 16,
+#if ZSU_POLICYDB_HAS_NETLINK_INTS
+#define ZSU_POLICYDB_BASE	16
+#define ZSU_POLICYDB_SIZE	576
+#else /* 6.18: mls_enabled alone, then symtab */
+#define ZSU_POLICYDB_BASE	8
+#define ZSU_POLICYDB_SIZE	568
+#endif
+
+static_assert(sizeof(struct policydb) == ZSU_POLICYDB_SIZE,
+	      "zsu: policydb size drift");
+static_assert(offsetof(struct policydb, symtab) == ZSU_POLICYDB_BASE,
 	      "zsu: policydb.symtab drift (leading ints lost?)");
-static_assert(offsetof(struct policydb, sym_val_to_name) == 208,
-	      "zsu: policydb.sym_val_to_name drift");
-static_assert(offsetof(struct policydb, class_val_to_struct) == 272,
-	      "zsu: policydb.class_val_to_struct drift");
-static_assert(offsetof(struct policydb, role_val_to_struct) == 280,
-	      "zsu: policydb.role_val_to_struct drift");
-static_assert(offsetof(struct policydb, user_val_to_struct) == 288,
-	      "zsu: policydb.user_val_to_struct drift");
-static_assert(offsetof(struct policydb, type_val_to_struct) == 296,
-	      "zsu: policydb.type_val_to_struct drift");
-static_assert(offsetof(struct policydb, te_avtab) == 304,
-	      "zsu: policydb.te_avtab drift");
-static_assert(offsetof(struct policydb, role_tr) == 328,
-	      "zsu: policydb.role_tr drift");
-static_assert(offsetof(struct policydb, filename_trans_ttypes) == 344,
+static_assert(offsetof(struct policydb, sym_val_to_name) ==
+	      ZSU_POLICYDB_BASE + 192, "zsu: policydb.sym_val_to_name drift");
+static_assert(offsetof(struct policydb, class_val_to_struct) ==
+	      ZSU_POLICYDB_BASE + 256, "zsu: policydb.class_val_to_struct drift");
+static_assert(offsetof(struct policydb, role_val_to_struct) ==
+	      ZSU_POLICYDB_BASE + 264, "zsu: policydb.role_val_to_struct drift");
+static_assert(offsetof(struct policydb, user_val_to_struct) ==
+	      ZSU_POLICYDB_BASE + 272, "zsu: policydb.user_val_to_struct drift");
+static_assert(offsetof(struct policydb, type_val_to_struct) ==
+	      ZSU_POLICYDB_BASE + 280, "zsu: policydb.type_val_to_struct drift");
+static_assert(offsetof(struct policydb, te_avtab) ==
+	      ZSU_POLICYDB_BASE + 288, "zsu: policydb.te_avtab drift");
+static_assert(offsetof(struct policydb, role_tr) ==
+	      ZSU_POLICYDB_BASE + 312, "zsu: policydb.role_tr drift");
+static_assert(offsetof(struct policydb, filename_trans_ttypes) ==
+	      ZSU_POLICYDB_BASE + 328,
 	      "zsu: policydb.filename_trans_ttypes drift");
-static_assert(offsetof(struct policydb, filename_trans) == 360,
-	      "zsu: policydb.filename_trans drift");
-static_assert(offsetof(struct policydb, compat_filename_trans_count) == 376,
+static_assert(offsetof(struct policydb, filename_trans) ==
+	      ZSU_POLICYDB_BASE + 344, "zsu: policydb.filename_trans drift");
+static_assert(offsetof(struct policydb, compat_filename_trans_count) ==
+	      ZSU_POLICYDB_BASE + 360,
 	      "zsu: policydb.compat_filename_trans_count drift");
-static_assert(offsetof(struct policydb, bool_val_to_struct) == 384,
-	      "zsu: policydb.bool_val_to_struct drift");
-static_assert(offsetof(struct policydb, te_cond_avtab) == 392,
-	      "zsu: policydb.te_cond_avtab drift");
-static_assert(offsetof(struct policydb, cond_list) == 416,
-	      "zsu: policydb.cond_list drift");
-static_assert(offsetof(struct policydb, cond_list_len) == 424,
-	      "zsu: policydb.cond_list_len drift");
-static_assert(offsetof(struct policydb, role_allow) == 432,
-	      "zsu: policydb.role_allow drift");
-static_assert(offsetof(struct policydb, ocontexts) == 440,
+static_assert(offsetof(struct policydb, bool_val_to_struct) ==
+	      ZSU_POLICYDB_BASE + 368, "zsu: policydb.bool_val_to_struct drift");
+static_assert(offsetof(struct policydb, te_cond_avtab) ==
+	      ZSU_POLICYDB_BASE + 376, "zsu: policydb.te_cond_avtab drift");
+static_assert(offsetof(struct policydb, cond_list) ==
+	      ZSU_POLICYDB_BASE + 400, "zsu: policydb.cond_list drift");
+static_assert(offsetof(struct policydb, cond_list_len) ==
+	      ZSU_POLICYDB_BASE + 408, "zsu: policydb.cond_list_len drift");
+static_assert(offsetof(struct policydb, role_allow) ==
+	      ZSU_POLICYDB_BASE + 416, "zsu: policydb.role_allow drift");
+static_assert(offsetof(struct policydb, ocontexts) ==
+	      ZSU_POLICYDB_BASE + 424,
 	      "zsu: policydb.ocontexts drift (OCON_NUM not 9?)");
-static_assert(offsetof(struct policydb, genfs) == 512,
-	      "zsu: policydb.genfs drift");
-static_assert(offsetof(struct policydb, range_tr) == 520,
-	      "zsu: policydb.range_tr drift");
-static_assert(offsetof(struct policydb, type_attr_map_array) == 536,
+static_assert(offsetof(struct policydb, genfs) ==
+	      ZSU_POLICYDB_BASE + 496, "zsu: policydb.genfs drift");
+static_assert(offsetof(struct policydb, range_tr) ==
+	      ZSU_POLICYDB_BASE + 504, "zsu: policydb.range_tr drift");
+static_assert(offsetof(struct policydb, type_attr_map_array) ==
+	      ZSU_POLICYDB_BASE + 520,
 	      "zsu: policydb.type_attr_map_array drift");
-static_assert(offsetof(struct policydb, policycaps) == 544,
-	      "zsu: policydb.policycaps drift");
-static_assert(offsetof(struct policydb, permissive_map) == 560,
-	      "zsu: policydb.permissive_map drift");
+static_assert(offsetof(struct policydb, policycaps) ==
+	      ZSU_POLICYDB_BASE + 528, "zsu: policydb.policycaps drift");
+static_assert(offsetof(struct policydb, permissive_map) ==
+	      ZSU_POLICYDB_BASE + 544, "zsu: policydb.permissive_map drift");
 
 /* ========================================================================
  * Resolved kernel entry points
@@ -542,6 +609,18 @@ extern struct cred *(*sym_prepare_creds)(void);
 extern int (*sym_commit_creds)(struct cred *new);
 /* verified in 6.18 cred.c: returns int, not void */
 extern int (*sym_set_cred_ucounts)(struct cred *cred);
+
+/*
+ * set_cred_ucounts() arrived in 5.14; storing its slot is harmless on older
+ * kernels (it stays NULL and nothing calls it), but the symbol table must
+ * not REQUIRE it there, so elevate.c's table drives the strictness from
+ * this macro.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 0)
+#define ZSU_HAS_SET_CRED_UCOUNTS 1
+#else
+#define ZSU_HAS_SET_CRED_UCOUNTS 0
+#endif
 
 /*
  * alloc_uid() is in kernel/user.c and is NOT exported on 5.10 or 6.18, so it is
@@ -733,7 +812,7 @@ static inline int zsu_context_str_to_sid(const char *scontext, u32 *out_sid)
  */
 static inline int zsu_rebind_ucounts(struct cred *new_cred)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 0)
+#if ZSU_HAS_SET_CRED_UCOUNTS
 	if (!sym_set_cred_ucounts)
 		return -ENOENT;
 	return sym_set_cred_ucounts(new_cred);
@@ -789,13 +868,41 @@ static inline void zsu_clear_seccomp_work(struct task_struct *tsk)
  * specially. It lives in task_struct->flags on every kernel in range -
  * signal_struct, which used to carry it, was removed in 5.8 - so there is no
  * version split to maintain here.
+ *
+ * sighand is version dependent, and both ends fail loudly if guessed:
+ *
+ *   5.10 .. 6.1   release() does WARN_ON(tsk->sighand != NULL) ("effectively
+ *                 holding the siglock") and touches nothing else of the task,
+ *                 so the fake must have NO sighand.
+ *   6.6 onward    release() takes tsk->sighand->siglock itself, so the fake
+ *                 MUST carry one. A fully zeroed sighand_struct is a valid
+ *                 /unlocked/ spinlock (all-zero is the unlocked value for
+ *                 both qspinlock and ticket lock) and 6.6/6.12/6.18 touch
+ *                 nothing else on it, so a zeroed one is handed over and
+ *                 freed after the call. Getting this wrong on 6.6+ is a NULL
+ *                 dereference inside spin_lock_irq() on every elevation of
+ *                 an app, i.e. the default path.
+ *
+ * ZSU_SECCOMP_FAKE_SIGHAND tells seccomp.c whether the fake task's tail
+ * memory is a sighand_struct (sizeof() is on a public header, so there is
+ * nothing to mirror).
  */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+#define ZSU_SECCOMP_FAKE_SIGHAND	1
+#else
+#define ZSU_SECCOMP_FAKE_SIGHAND	0
+#endif
+
 static inline void zsu_prep_fake_seccomp_task(struct task_struct *fake,
 					      struct seccomp_filter *f)
 {
 	memset(&fake->seccomp, 0, sizeof(fake->seccomp));
 	fake->seccomp.filter = f;
 	fake->flags |= PF_EXITING;
+#if ZSU_SECCOMP_FAKE_SIGHAND
+	/* seccomp.c appends the zeroed sighand right behind the fake task. */
+	fake->sighand = (struct sighand_struct *)(fake + 1);
+#endif
 }
 
 #endif /* _ZSU_COMPAT_H */

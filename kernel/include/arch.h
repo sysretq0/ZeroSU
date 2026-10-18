@@ -44,9 +44,13 @@
 #define ZSU_ARCH_NAME		"x86_64"
 #define ZSU_REBOOT_SYMBOL	"__x64_sys_reboot"
 /*
- * On x86_64 pt_regs exposes di/si/dx/cx/r8/r9. For a syscall the 4th
- * argument arrives in rcx (there is no swap to r11, so r10 stays in rcx),
- * hence cx rather than a "r10" field that pt_regs does not have.
+ * On x86_64 a syscall's arguments live in di/si/dx/r10/r8/r9: the SYSCALL
+ * instruction clobbers rcx with the return address and r11 with rflags, so
+ * the kernel's syscall convention moves the caller's 4th argument into
+ * r10 (glibc's syscall() makes the same move). In the pt_regs snapshot
+ * taken at syscall entry, cx therefore holds the *user RIP*, not the 4th
+ * argument; r10 is the arg. The wrapper's own first argument (the pt_regs
+ * pointer) is in di, which is what ZSU_SYS_PT_REGS reads.
  */
 #ifndef PT_REGS_PARM1
 #define PT_REGS_PARM1(_r)	((_r)->di)
@@ -55,7 +59,7 @@
 #define ZSU_SYS_PARAM1(_r)	((unsigned long)(_r)->di)
 #define ZSU_SYS_PARAM2(_r)	((unsigned long)(_r)->si)
 #define ZSU_SYS_PARAM3(_r)	((unsigned long)(_r)->dx)
-#define ZSU_SYS_PARAM4(_r)	((unsigned long)(_r)->cx)
+#define ZSU_SYS_PARAM4(_r)	((unsigned long)(_r)->r10)
 #define ZSU_SYS_PARAM5(_r)	((unsigned long)(_r)->r8)
 #define ZSU_SYS_PARAM6(_r)	((unsigned long)(_r)->r9)
 

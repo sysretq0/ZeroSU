@@ -57,17 +57,19 @@ MODULE_PARM_DESC(keep_no_new_privs,
 __typeof__(sym_prepare_creds) sym_prepare_creds;
 __typeof__(sym_commit_creds) sym_commit_creds;
 __typeof__(sym_alloc_uid) sym_alloc_uid;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 0)
+/*
+ * Present unconditionally: on < 5.14 nothing references it (see
+ * zsu_rebind_ucounts()), and the table below does not *require* it there,
+ * so an unresolved slot is a logged warning, not a load failure.
+ */
 __typeof__(sym_set_cred_ucounts) sym_set_cred_ucounts;
-#endif
 
 static struct zsu_symtab_ent elevate_syms[] = {
 	{ "prepare_creds",	(void **)&sym_prepare_creds,	true },
 	{ "commit_creds",	(void **)&sym_commit_creds,	true },
-	{ "alloc_uid",		(void **)&sym_alloc_uid,		true },
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 0)
-	{ "set_cred_ucounts",	(void **)&sym_set_cred_ucounts,	true },
-#endif
+	{ "alloc_uid",		(void **)&sym_alloc_uid,	true },
+	{ "set_cred_ucounts",	(void **)&sym_set_cred_ucounts,
+	  ZSU_HAS_SET_CRED_UCOUNTS },
 };
 
 int zsu_elevate_syms_init(void)

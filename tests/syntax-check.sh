@@ -84,7 +84,7 @@ for arch in arm64 x86_64 riscv; do
 	riscv)  archcfg=CONFIG_RISCV   ;;
 	esac
 
-	for ver in 5.10.0 6.1.0 6.6.0 6.12.0 6.18.0; do
+	for ver in 5.10.0 5.15.0 6.1.0 6.6.0 6.12.0 6.18.0; do
 		major=$(echo "$ver" | cut -d. -f1)
 		minor=$(echo "$ver" | cut -d. -f2)
 		bugfix=$(echo "$ver" | cut -d. -f3)
@@ -99,6 +99,48 @@ for arch in arm64 x86_64 riscv; do
 				-Wno-attributes \
 				-DLINUX_VERSION_CODE="KERNEL_VERSION($major, $minor, $bugfix)" \
 				-D"$archcfg"=1 \
+				-I "$ROOT/tests/stub-include" \
+				-I "$ROOT/kernel/include" \
+				"$src" 2>"$TMP/zsu-syntax-err"; then
+				ok="$ok $base"
+			else
+				printf '\n'
+				head -20 "$TMP/zsu-syntax-err"
+				fail=1
+			fi
+		done
+
+		if [ -n "$ok" ]; then
+			printf 'ok:%s\n' "$ok"
+		else
+			printf 'no sources\n'
+		fi
+	done
+done
+
+#
+# CFI cells: 5.10/5.15 are CFI_CLANG (jump-table) kernels while 6.1+ are
+# kCFI, so symbols.c's resolution order has two regimes and both must
+# compile (and, since the stubs cannot model the real __cfi_check, at
+# least make the ZSU_RESOLVE_JT_FIRST branch real code rather than a
+# dead ifdef).
+#
+for cfg in CFI_CLANG; do
+	for ver in 5.10.0 6.18.0; do
+		major=$(echo "$ver" | cut -d. -f1)
+		minor=$(echo "$ver" | cut -d. -f2)
+		bugfix=$(echo "$ver" | cut -d. -f3)
+		printf '%-8s %-8s ' "$ver" "$cfg"
+
+		ok=""
+		for src in "$ROOT"/kernel/*.c; do
+			[ -e "$src" ] || continue
+			base=$(basename "$src" .c)
+
+			if "$CC" -fsyntax-only -Wall -Wextra -Wno-unused-parameter \
+				-Wno-attributes \
+				-DLINUX_VERSION_CODE="KERNEL_VERSION($major, $minor, $bugfix)" \
+				-DCONFIG_ARM64=1 -D"$cfg"=1 \
 				-I "$ROOT/tests/stub-include" \
 				-I "$ROOT/kernel/include" \
 				"$src" 2>"$TMP/zsu-syntax-err"; then

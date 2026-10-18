@@ -23,6 +23,7 @@
 #include <linux/errno.h>
 #include <linux/module.h>
 #include <linux/sched.h>
+#include <linux/sched/signal.h>	/* struct sighand_struct (6.6+ fake task) */
 #include <linux/seccomp.h>
 #include <linux/slab.h>
 
@@ -62,6 +63,7 @@ int zerosu_seccomp_strip(struct task_struct *tsk)
 	struct seccomp_filter *orig;
 	struct task_struct *fake;
 	unsigned long flags;
+	size_t extra;
 
 	if (!tsk || !tsk->sighand)
 		return -EINVAL;
@@ -73,8 +75,18 @@ int zerosu_seccomp_strip(struct task_struct *tsk)
 	 * Sleeping allocation, deliberately outside the spinlock below. It is
 	 * wasted when the task has no filter, which is the common case, but
 	 * the alternative - allocating under a spinlock - is not an option.
+	 *
+	 * On 6.6+ seccomp_filter_release() takes tsk->sighand->siglock, so the
+	 * fake task needs a sighand: one zeroed sighand_struct is appended
+	 * behind the fake task itself (see ZSU_SECCOMP_FAKE_SIGHAND in
+	 * compat.h). A zeroed spinlock is the unlocked value for both qspinlock
+	 * and ticket locks, and the release path touches nothing else in it.
+	 * On 5.10..6.1 the release path WARNs if sighand is non-NULL, so the
+	 * extra bytes and the pointer stay absent there.
 	 */
-	fake = kzalloc(sizeof(*fake), GFP_KERNEL);
+	extra = ZSU_SECCOMP_FAKE_SIGHAND ?
+		sizeof(struct sighand_struct) : 0;
+	fake = kzalloc(sizeof(*fake) + extra, GFP_KERNEL);
 	if (!fake)
 		return -ENOMEM;
 
@@ -92,6 +104,6 @@ int zerosu_seccomp_strip(struct task_struct *tsk)
 		sym_seccomp_filter_release(fake);
 	}
 
-	kfree(fake);
+	kfree(fake);	/* covers the appended sighand (same allocation) */
 	return 0;
 }

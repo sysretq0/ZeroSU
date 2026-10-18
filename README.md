@@ -149,6 +149,10 @@ valuable artifact in the repository.
 | `reboot(cmd, magic1, magic2, &fd)` | The kernel sees `SYSCALL_DEFINE4(reboot, int magic1, int magic2, unsigned int cmd, void __user *arg)` — **magics first**. libc's `reboot(int cmd, …)` reorders them. | `kernel/reboot.c`, identical on 5.10 & 6.18 |
 | Argument stomping is needed to stop the real reboot | Not needed at all. `magic1 != LINUX_REBOOT_MAGIC1` (`0xfee1dead`) → `-EINVAL` before `switch (cmd)`. The stomp was deleted as dead weight. | `kernel/reboot.c:325` |
 | `permissive_map` is indexed by `type - 1` | It is indexed by the **raw type value**. Getting this wrong marks the *neighbouring* type permissive — a security bug, not a crash. | `services.c:1147` (both branches) |
+| `policydb->android_netlink_route/getneigh` are unconditional | Present on 5.10 … 6.12, **removed on 6.18**: the feature became `POLICYDB_CAP_NETLINK_XPERM`. The mirror has them version-gated; keeping them unconditionally shifted every SELinux offset by 8 bytes on 6.18 — the exact shape of the dropped-field bug further down. | `ss/policydb.h` android17-6.18-lts |
+| Calling a kallsyms-resolved kernel function through its raw body address is fine | On `CONFIG_CFI_CLANG` (5.10/5.15) it is **a guaranteed panic**: the kernel's `__cfi_check()` only accepts jump-table (`<name>.cfi_jt`) addresses for indirect calls. kCFI (6.1+) deliberately fixed this by storing a type hash before the body. Resolution therefore prefers the `.cfi_jt` thunk on CFI_CLANG kernels and the body everywhere else. | `kernel/cfi.c` (5.10: `find_check_fn` → `expand_table` panic; 6.1+: `report_cfi_failure`) |
+| `seccomp_filter_release()` accepts a bare fake task | On 5.10…6.1 yes (`WARN_ON(tsk->sighand != NULL)` — bare is required). From **6.6** it takes `tsk->sighand->siglock`, so the fake task must carry a (zeroed, unlocked) sighand — otherwise every elevation of a filter-carrying task NULL-derefs inside `spin_lock_irq()`. | `kernel/seccomp.c:seccomp_filter_release` per branch |
+| x86_64 syscall arg 4 arrives in `rcx` | It arrives in **`r10`**; `rcx` holds the user RIP (the `SYSCALL` instruction clobbers it). Reading `cx` instead fed the kernel a user-space return address as the session-type argument. | `arch/x86/entry/entry_64.S`, `arch/x86/include/asm/ptrace.h` |
 | `role_datum->types` is indexed by `type` | It is indexed by `type - 1`. | `policydb.c:969` |
 | `ebitmap_set_bit(e, unsigned long bit, int)` | `u32 bit` from 6.x onward. A 64-bit argument width on a 32-bit parameter is a real ABI mismatch. | `ss/ebitmap.h:130` |
 | `prepare_creds(const struct cred *old)` | `prepare_creds(void)` — **no arguments**. | `cred.c:253` (5.10), `:206` (6.18) |
@@ -204,7 +208,7 @@ worth less than one that names them.
   under `task_lock()`. For a remote task we reproduce exactly that sequence
   and never call it.
 - **`selinux_state.policy`'s offset is not constant**: it moves with
-  `policycap[]`, which is 8 / 8 / 9 / 14 across 5.10 / 6.6 / 6.12 / 6.18 and is
+  `policycap[]`, which is 8 / 8 / 9 / 12 across 5.10 / 6.6 / 6.12 / 6.18 and is
   config-dependent besides. Hence a bounded ±32-byte probe validated against
   the policydb's own invariants, caching the *slot address* (not the value, so
   a `selinuxfs` policy reload cannot leave it stale).
