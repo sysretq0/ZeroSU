@@ -84,7 +84,7 @@ _Static_assert(ZSU_GATEWAY_MAGIC1 == 0x5A455255u, "magic1");
 _Static_assert(ZSU_GATEWAY_MAGIC2 == 0x00005355u, "magic2");
 _Static_assert(ZSU_SESSION_PLAIN == 0, "plain session");
 _Static_assert(ZSU_SESSION_SU == 1, "su session");
-_Static_assert(ZSU_MAX_SESSIONS == 8, "session cap");
+_Static_assert(ZSU_MAX_SESSIONS == 2, "session cap");
 _Static_assert(ZSU_PERM_ANY == 0x01u && ZSU_PERM_KEY == 0x02u &&
 	       ZSU_PERM_ENROLL == 0x04u && ZSU_PERM_ROOT == 0x08u, "perm bits");
 

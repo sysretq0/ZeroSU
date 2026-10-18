@@ -38,7 +38,14 @@
 /* Session flavours handed out by the gateway. */
 #define ZSU_SESSION_PLAIN	0	/* [zerosu]      */
 #define ZSU_SESSION_SU		1	/* [zerosu_su]   */
-#define ZSU_MAX_SESSIONS	8
+/*
+ * Session cap. The only legitimate long-run client is zerosud (one SU
+ * session), so 2 gives it one spare slot for a hand-opened lab session
+ * when insmod mode=0. Every other consumer drives the daemon, and an
+ * unreachable beyond-two cap is itself an attack-surface statement: a
+ * handful of idle fds cannot starve the broker.
+ */
+#define ZSU_MAX_SESSIONS	2
 
 /*
  * The gateway is reached through reboot(2).
