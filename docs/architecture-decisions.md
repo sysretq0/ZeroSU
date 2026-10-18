@@ -509,20 +509,24 @@ is that documented conventions become enforced invariants.
 - Production install scripts pass `mode=1`; lab and CI use the default
   `mode=0` because the smoke tests mint sessions by hand.
 
-### D31. A session fd pins the module (`try_module_get`, 1:1 with sessions)
-- `anon_inode_getfile()` never pins `fops->owner` for us, and our entry
-  point is a kprobe — there is no open() on a device node for VFS to
-  take a reference at. `install_work()` therefore takes exactly one
-  `THIS_MODULE` reference per session after reserving the fd and before
-  creating the inode; `__fput() -> fops_put()` releases it when the fd
-  closes. `rmmod` now returns `-EBUSY` for exactly the window in which
-  the module's fops are reachable (O2).
-- Failure unwinding is ordered: `get_unused_fd` failure drops only the
-  slot; `anon_inode_getfile` failure does the manual `module_put()`
-  (no `struct file` exists yet); `copy_to_user` failure does *not* do a
-  manual put, because the `struct file` owns the reference and the
-  `fput()` drives both `zerosu_session_release()` and `fops_put()`.
-  One take, one release, on one of exactly two owners.
+### D31. A session fd pins the module — through the VFS, not by hand
+- Corrected after live verification. The first cut of this decision
+  added a manual `try_module_get()`/`module_put()` pair around
+  `anon_inode_getfile()`, reasoning that "anon_inode_getfile() does not
+  pin `fops->owner` on our behalf". That premise is **false**: with
+  `fops .owner == THIS_MODULE` (our session fops), `__anon_inode_getfile()`
+  itself takes `try_module_get(fops->owner)` — verified in the trees we
+  build against (`fs/anon_inodes.c` line 87 on 5.10/5.15, line 99 on
+  6.1–6.12, line 143 on 6.18). `__fput() -> fops_put()` releases it on
+  close.
+- The manual pair therefore double-counted: the module refcount grew by
+  one per session, was never released, and one emulator session was
+  rendered permanently `EBUSY` until reboot. Caught live: refcount went
+  4 → 5 → 6 with zero fds open, one probe session added exactly +1.
+- Standing invariant (O2): rmmod returns `-EBUSY` for exactly the
+  window in which a session fd holds a file object, via the VFS-owned
+  reference. Nobody takes module references by hand around session
+  creation. The 1:1 property lives in `anon_inode_getfile()` + `fops_put`.
 
 ### D32. The new policy type is published, graced, then made findable
 - Order in `zsu_sepolicy_add()` is now: grow → fill →

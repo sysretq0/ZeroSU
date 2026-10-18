@@ -335,8 +335,6 @@ static inline int atomic_dec_and_test(atomic_t *v) { (void)v; return 1; }
 static inline int atomic_inc(atomic_t *v) { (void)v; return 0; }
 static inline int atomic_read(const atomic_t *v) { (void)v; return 0; }
 static inline int atomic_xchg(atomic_t *v, int n) { (void)v; (void)n; return 0; }
-static inline int try_module_get(struct module *mod) { (void)mod; return 1; }
-static inline void module_put(struct module *mod) { (void)mod; }
 #define unlikely(_x)	(_x)
 #define likely(_x)	(_x)
 static inline unsigned long copy_from_user(void *k, const void __user *u, size_t n)
