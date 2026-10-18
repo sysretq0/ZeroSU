@@ -128,8 +128,13 @@ struct zsu_session {
 	u32 ring_count;
 };
 
+/* Gateway disarm posture; the insmod parameter is `mode=` (see gateway.c). */
+#define ZSU_GATEWAY_MODE_OPEN	0
+#define ZSU_GATEWAY_MODE_CLOSE	1
+
 int zerosu_gateway_init(void);
 void zerosu_gateway_exit(void);
+void zerosu_gateway_note_authenticated(void);
 int zsu_gateway_syms_init(void);
 int zerosu_session_release(struct inode *inode, struct file *file);
 extern const struct file_operations zerosu_session_fops;

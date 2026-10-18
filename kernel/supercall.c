@@ -528,6 +528,16 @@ long zerosu_supercall_ioctl(struct file *file, unsigned int cmd,
 		mutex_lock(&ctx->event_lock);
 		zerosu_note_auth(ctx, ret == 0);
 		mutex_unlock(&ctx->event_lock);
+		/*
+		 * Production posture (insmod mode=1): the first authenticated
+		 * session also closes the reboot gateway. Nothing else in
+		 * this ioctl path needs the kprobe, and the daemon's session
+		 * is already valid by construction, so calling this after the
+		 * auth bookkeeping is the exact moment the remaining probe
+		 * surface goes to zero.
+		 */
+		if (!ret)
+			zerosu_gateway_note_authenticated();
 		break;
 	/*
 	 * zerosu_cmd.arg is multiplexed by opcode: for ELEVATE it is the

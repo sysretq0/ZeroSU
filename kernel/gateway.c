@@ -80,6 +80,27 @@ static wait_queue_head_t zsu_tw_wait;
 
 static struct kprobe reboot_kp;
 
+/*
+ * If true, the very first successful AUTH_VERIFY unregisters the kprobe.
+ * That is the gateway-closed production posture: only the boot-time window
+ * (install + daemon authentication, a few hundred milliseconds) accepts a
+ * fresh reboot(2) probe, so a later probe from any process - including a
+ * root scanner that knows the public magic constants - is indistinguishable
+ * from this module not being loaded. Insmod with mode=0 (ZSU_GATEWAY_MODE_OPEN)
+ * to keep the door armed permanently, which is the lab/CI mode: it must be
+ * possible to mint new sessions by hand (tests/smoke_test.c does exactly
+ * that) without a daemon to hold the first authenticated one.
+ */
+static int gateway_mode = ZSU_GATEWAY_MODE_OPEN;
+module_param_named(mode, gateway_mode, uint, 0400);
+MODULE_PARM_DESC(mode,
+		 "0 = open (keep the reboot gateway armed; lab), "
+		 "1 = close after the first session authenticates "
+		 "(production)");
+
+/* Set once the kprobe has been (or should not be) unregistered. */
+static atomic_t gateway_closed = ATOMIC_INIT(0);
+
 /* task_work_add() is internal on 5.10/6.1 and EXPORT_SYMBOL_GPL by 6.18;
  * a lookup behaves the same either way, so it stays on the resolve path. */
 static int (*sym_task_work_add)(struct task_struct *task,
@@ -220,6 +241,13 @@ static int __nocfi zerosu_reboot_pre(struct kprobe *kp, struct pt_regs *kp_regs)
 	if (unlikely(current->flags & PF_KTHREAD) || !current->mm)
 		return 0;
 
+	/* Belt for the braces below unregister_kprobe(): once the gateway is
+	 * closed this handler is only reachable for as long as
+	 * synchronize_rcu() inside the disarm still runs (or is still pending),
+	 * and a reload would re-init the counters - refuse it flatly. */
+	if (atomic_read(&gateway_closed))
+		return 0;
+
 	real = ZSU_SYS_PT_REGS(kp_regs);
 
 	/* PARAM1/PARAM2 are magic1/magic2 in *syscall* order, see the header. */
@@ -323,8 +351,34 @@ void zerosu_gateway_exit(void)
 	 *   wait_event()         - queued task works have finished running
 	 * The last one is what stops zerosu.ko from unmapping .text while
 	 * zerosu_install_work() is still executing inside it.
+	 *
+	 * If the gateway already disarmed itself at first authentication
+	 * (mode=1), the kprobe is already gone; the remaining two steps still
+	 * apply because short-lived task works could still be in flight.
 	 */
-	unregister_kprobe(&reboot_kp);
+	if (!atomic_xchg(&gateway_closed, 1))
+		unregister_kprobe(&reboot_kp);
 	synchronize_rcu();
 	wait_event(zsu_tw_wait, !atomic_read(&inflight_tw));
+}
+
+/*
+ * Callable from the ioctl path at the moment of a session's successful
+ * AUTH_VERIFY. With the production posture (insmod mode=1) this is where
+ * the last publicly observable trace of the module's existence - a fresh
+ * reboot(2) with the magic pair - stops being mintable, and unregistering
+ * the kprobe is what makes the claim true rather than advisory: the probe
+ * is off the syscall path, so even a scanner holding the magic gets the
+ * plain stock EPERM/EINVAL. Existing session fds are untouched; a daemon
+ * that needs a new session after this has to go through rmmod/insmod,
+ * which is what `zsu_ctl stop` exists for.
+ */
+void zerosu_gateway_note_authenticated(void)
+{
+	if (gateway_mode != ZSU_GATEWAY_MODE_CLOSE)
+		return;
+	if (atomic_xchg(&gateway_closed, 1))
+		return;
+	unregister_kprobe(&reboot_kp);
+	pr_info(ZSU_LOG_PREFIX "first session authenticated: gateway disarmed, kprobe free\n");
 }
