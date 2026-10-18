@@ -18,9 +18,14 @@
  * kernel sees SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int,
  * cmd, void __user *, arg), so the magics come first; libc's
  * reboot(int cmd, int magic1, ...) reorders them and would not arrive.
+ *
+ * stdbool.h is included explicitly because bionic does not pull `bool` in
+ * transitively the way glibc does; -Werror turns the difference into a
+ * build failure.
  */
 #include <errno.h>
 #include <fcntl.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>

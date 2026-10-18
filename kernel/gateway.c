@@ -187,7 +187,7 @@ out:
  * over ioctl. Authorization lives in supercall.c's zerosu_session_perm(); if
  * this handler required CAP_SYS_BOOT, the SuperKey flow would be pointless.
  */
-static int zerosu_reboot_pre(struct kprobe *kp, struct pt_regs *kp_regs)
+static int __nocfi zerosu_reboot_pre(struct kprobe *kp, struct pt_regs *kp_regs)
 {
 	struct zsu_tw *tw;
 	struct pt_regs *real;
