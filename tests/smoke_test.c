@@ -128,8 +128,22 @@ int main(int argc, char **argv)
 		 * AUTH_VERIFY expects the caller to prove it holds the key by
 		 * sending the digest; the kernel only ever stores the digest,
 		 * never the key, and compares in constant time.
+		 *
+		 * The digest below is SHA-256(0x5a x 64), which is exactly what
+		 * was enrolled above. The static assert keeps the enrollment and
+		 * the digest from drifting apart if ZSU_KEY_MAX changes; change
+		 * both together.
 		 */
-		memset(buf.raw, 0, sizeof(buf.raw));
+		static const unsigned char key_digest[ZSU_DIGEST_LEN] = {
+			0xcc, 0x73, 0x21, 0xcc, 0xe5, 0xe4, 0x40, 0x9b,
+			0xd8, 0x07, 0x7d, 0x58, 0x42, 0x2e, 0x12, 0x14,
+			0x96, 0x90, 0x59, 0xbb, 0xd4, 0x0b, 0x4e, 0xeb,
+			0x0d, 0xe0, 0xa6, 0x42, 0xf4, 0x0f, 0x72, 0x82,
+		};
+		_Static_assert(ZSU_KEY_MAX == 64,
+			       "digest matches the 64-byte 0x5a key; bump both");
+		memset(&buf, 0, sizeof(buf));
+		memcpy(buf.digest, key_digest, sizeof(key_digest));
 		buf.hdr.magic = ZSU_CMD_MAGIC;
 		buf.hdr.opcode = ZSU_CMD_AUTH_VERIFY;
 			buf.hdr.inlen = ZSU_PAYLOAD_DIGEST;
