@@ -28,9 +28,11 @@
  * Locking: policy_mutex serializes policy writers (rcu_replace_pointer of
  * state->policy happens under it). RCU readers - security_compute_av() and
  * friends - walk these arrays under rcu_read_lock() *without* the mutex, so a
- * replaced array may only be freed after synchronize_rcu(). Doing that inside
- * the mutex would stall every SELinux writer for a grace period, so
- * retirement happens after the unlock.
+ * replaced array may only be freed after synchronize_rcu(). One extra grace
+ * period *is* taken inside the mutex, between publishing the grown arrays and
+ * making the new type reachable through its symtab chain (see the commit in
+ * this file) - that one is about ordering, not freeing, and the retirement
+ * grace still happens after the unlock.
  */
 
 #include <linux/errno.h>
@@ -276,15 +278,43 @@ static int __nocfi zsu_sepolicy_add(void)
 		goto out_free_new;
 
 	/*
-	 * Publish all three arrays before nprim moves. Until nprim is bumped
-	 * no reader can reach index val - 1, so this is the moment the new
-	 * storage becomes observable.
+	 * Publish all three arrays before the name becomes reachable and
+	 * before nprim moves: both arrays-are-supersets and slot-v-initialized,
+	 * so any reader bounded by old_nprim is safe against the new storage
+	 * from this point on, and readers that index the new (val - 1) slot
+	 * cannot exist until a reader first learns about the type.
 	 */
 	smp_store_release(&p->type_val_to_struct, new_tvs);
 	smp_store_release(&p->type_attr_map_array, new_tam);
 	smp_store_release(&p->sym_val_to_name[ZSU_SYM_TYPES], new_svn);
 
-	/* symtab_insert() does not touch nprim, and it can still fail. */
+	/*
+	 * One boot-time grace period before the type becomes discoverable.
+	 * The reader population for name lookups
+	 * (security_context_str_to_sid() -> string_to_context_struct() ->
+	 * hashtab_search on p_types) does not hold the policy mutex and
+	 * indexes the arrays by the *found datum's* value, not by nprim, so
+	 * the hazard is a reader that cached a pointer to the old, smaller
+	 * array, then finds zsu in the hash chain, then indexes
+	 * td->value - 1 into memory behind the old array's allocation. The
+	 * release stores above cannot fix that: they order the publish for
+	 * acquire-side observers, but a plain, non-dependent load of a policy
+	 * pointer can still be served from a stale cache. synchronize_rcu()
+	 * is what closes it: every RCU read-side section that was in flight
+	 * at publish time is finished when it returns, so a reader that finds
+	 * zsu in the chain must have started after the grace period and
+	 * cannot be holding the old pointers. It costs a few milliseconds,
+	 * once per module load, inside policy_mutex.
+	 */
+	synchronize_rcu();
+
+	/*
+	 * Only now is the name findable, and after this point symtab_insert()
+	 * failing means rolling the array publish back (the old arrays are
+	 * re-published release-wise; the only readers that can interact with
+	 * the attempted insert started after the grace period, so none of
+	 * them can have found zsu, and none of them need the new storage).
+	 */
 	rc = zsu_symtab_insert(&p->p_types, key, td);
 	if (rc) {
 		pr_err(ZSU_LOG_PREFIX "symtab_insert(%s) failed: %d\n",
