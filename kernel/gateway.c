@@ -109,7 +109,7 @@ int zsu_gateway_syms_init(void)
  *     the module can never be told "drained" while its own text is still
  *     running.
  */
-static void zerosu_install_work(struct callback_head *work)
+static void __nocfi zerosu_install_work(struct callback_head *work)
 {
 	struct zsu_tw *tw = container_of(work, struct zsu_tw, cb);
 	struct zsu_session *ctx;

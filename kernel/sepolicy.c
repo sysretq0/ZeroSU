@@ -53,7 +53,7 @@ struct mutex *zsu_policy_mutex_cached;
  * Runs before policy_mutex can be locked, so it caches the slot address and
  * leaves the dereference to callers that hold the lock.
  */
-int zsu_selinux_discover(void)
+int __nocfi zsu_selinux_discover(void)
 {
 	const size_t home = offsetof(struct selinux_state, policy);
 	struct selinux_state *state = zsu_selinux_state;
@@ -131,7 +131,7 @@ static void *zsu_grow_array(const void *old, size_t old_elems, size_t elemsize)
  * idempotent, so a second module load is a no-op. The permissive bit is only
  * ever set, never cleared, which is why there is no get_bit round trip.
  */
-static int zsu_sepolicy_adopt(struct policydb *p, u32 val)
+static int __nocfi zsu_sepolicy_adopt(struct policydb *p, u32 val)
 {
 	/*
 	 * permissive_map is indexed by the raw type value, unlike every other
@@ -168,13 +168,13 @@ static struct zsu_symtab_ent sepolicy_syms[] = {
 	{ "ebitmap_destroy",			(void **)&zsu_ebitmap_destroy,		false },
 };
 
-int zsu_sepolicy_syms_init(void)
+int __nocfi zsu_sepolicy_syms_init(void)
 {
 	return zsu_resolve_symtab(sepolicy_syms, ARRAY_SIZE(sepolicy_syms),
 				  "sepolicy");
 }
 
-static int zsu_sepolicy_add(void)
+static int __nocfi zsu_sepolicy_add(void)
 {
 	struct type_datum **old_tvs, **new_tvs;
 	struct ebitmap *old_tam, *new_tam;

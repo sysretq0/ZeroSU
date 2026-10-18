@@ -72,7 +72,7 @@ static struct zsu_symtab_ent elevate_syms[] = {
 	  ZSU_HAS_SET_CRED_UCOUNTS },
 };
 
-int zsu_elevate_syms_init(void)
+int __nocfi zsu_elevate_syms_init(void)
 {
 	return zsu_resolve_symtab(elevate_syms, ARRAY_SIZE(elevate_syms),
 				  "elevate");
@@ -86,7 +86,7 @@ int zsu_elevate_syms_init(void)
  * group_info. in_group_p() binary searches the group list, so it must be
  * sorted; with a single supplementary group there is nothing to reorder.
  */
-static int zsu_setup_groups(struct cred *new_cred)
+static int __nocfi zsu_setup_groups(struct cred *new_cred)
 {
 	struct group_info *gi;
 
@@ -133,7 +133,7 @@ static void zsu_setup_caps(struct cred *new_cred)
  * against the original uid's counters, and would make free_uid() drop a
  * refcount we never took.
  */
-static int zsu_swap_user(struct cred *new_cred)
+static int __nocfi zsu_swap_user(struct cred *new_cred)
 {
 	struct user_struct *old_user, *new_user;
 	kuid_t uid = make_kuid(new_cred->user_ns, ZSU_TARGET_UID);
@@ -162,7 +162,7 @@ static int zsu_swap_user(struct cred *new_cred)
  * Build the elevated cred without installing it. Returns one reference, the
  * one prepare_creds() handed us.
  */
-static struct cred *zsu_build_cred(void)
+static struct cred *__nocfi zsu_build_cred(void)
 {
 	struct cred *new_cred;
 	int rc;
@@ -211,7 +211,8 @@ fail:
  *                  old references. Both new fields need a reference, so take
  *                  one before dropping the two we are replacing.
  */
-static int zsu_install_cred(struct task_struct *tsk, struct cred *new_cred)
+static int __nocfi zsu_install_cred(struct task_struct *tsk,
+				    struct cred *new_cred)
 {
 	const struct cred *old_cred, *old_real_cred;
 
@@ -243,7 +244,7 @@ static void zsu_clear_nnp(struct task_struct *tsk)
 	clear_bit(PFA_NO_NEW_PRIVS, &tsk->atomic_flags);
 }
 
-static int do_elevate(struct task_struct *tsk, u32 mode)
+static int __nocfi do_elevate(struct task_struct *tsk, u32 mode)
 {
 	struct cred *new_cred;
 	int rc;
@@ -281,12 +282,12 @@ static int do_elevate(struct task_struct *tsk, u32 mode)
 	return 0;
 }
 
-int zerosu_elevate(u32 mode)
+int __nocfi zerosu_elevate(u32 mode)
 {
 	return do_elevate(current, mode);
 }
 
-int zerosu_elevate_task(pid_t pid_nr, u32 mode, u64 start_time)
+int __nocfi zerosu_elevate_task(pid_t pid_nr, u32 mode, u64 start_time)
 {
 	struct task_struct *tsk;
 	struct pid *kpid;

@@ -71,7 +71,7 @@ static void zsu_kprobe_release(struct kprobe *kp)
 	unregister_kprobe(kp);
 }
 
-int zerosu_symbols_init(void)
+int __nocfi zerosu_symbols_init(void)
 {
 	static const char base[] = "kallsyms_lookup_name";
 	static const char thunk[] = "kallsyms_lookup_name" ZSU_CFI_JT_SUFFIX;
@@ -154,7 +154,7 @@ void zerosu_symbols_exit(void)
  *
  * Returns NULL for "not found"; never a partially valid answer.
  */
-void *zerosu_resolve_raw(const char *name)
+void *__nocfi zerosu_resolve_raw(const char *name)
 {
 	char alias[128];
 	void *addr;
@@ -172,7 +172,7 @@ void *zerosu_resolve_raw(const char *name)
 	return (void *)zsu_kallsyms_lookup_name(name);
 }
 
-int zerosu_resolve(const char *name, void **out)
+int __nocfi zerosu_resolve(const char *name, void **out)
 {
 	void *addr = zerosu_resolve_raw(name);
 
@@ -191,7 +191,7 @@ int zerosu_resolve(const char *name, void **out)
  * call fails: the caller turns that into a module load failure. Optional
  * entries are left NULL and the caller must check before use.
  */
-int zsu_resolve_symtab(struct zsu_symtab_ent *tbl, unsigned int n,
+int __nocfi zsu_resolve_symtab(struct zsu_symtab_ent *tbl, unsigned int n,
 		       const char *owner)
 {
 	unsigned int i;

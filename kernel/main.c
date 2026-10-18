@@ -40,7 +40,7 @@ MODULE_PARM_DESC(verbose, "log each init stage");
 			pr_info(ZSU_LOG_PREFIX "init: %s\n", _name);	\
 	} while (0)
 
-static int __init zerosu_init(void)
+static int __init __nocfi zerosu_init(void)
 {
 	int rc;
 

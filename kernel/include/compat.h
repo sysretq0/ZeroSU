@@ -139,6 +139,27 @@
 #define ZSU_RESOLVE_JT_FIRST 0
 #endif
 
+/*
+ * __nocfi - the other, field-proven half of living under CFI: the kernel
+ * defines it as __attribute__((__no_sanitize__("cfi"))) on CFI_CLANG builds
+ * (5.10/5.15), as ("kcfi") on 6.1+, and as nothing elsewhere (compiler-clang.h
+ * / compiler_types.h; the compiler_types.h fallback only defines it when it
+ * hasn't been defined already, so a stub or gcc build is unaffected). At a
+ * __nocfi call site the caller-side type check is simply not emitted, so a
+ * raw kallsyms-resolved address can be called directly. KernelSU uses this
+ * on every function that calls a resolved kernel pointer, and the .cfi_jt
+ * thunk order only for pointers the KERNEL calls through its own checked
+ * code. We never store a resolved kernel address into a kernel function
+ * table (every fops/pre_handler/task_work callback is our own code), so
+ * __nocfi on the calling functions is the primary defence and the thunk
+ * preference is the belt under it. Functions that contain a sym_* call must
+ * carry this attribute; an instrumented call site with a body address is a
+ * guaranteed panic on 5.10/5.15.
+ */
+#ifndef __nocfi
+#define __nocfi
+#endif
+
 /* selinuxfs-era inlines dropped in 6.6 (see table in sepolicy.c). */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 #define ZSU_SECCTX_TO_SID_TAKES_STATE 1
@@ -706,8 +727,11 @@ static inline struct policydb *zsu_policydb(void)
  * this file were wrong for a given kernel, these invariants are the first
  * thing that breaks; refuse to hand out a policydb rather than corrupt it.
  * Caller must hold policy_mutex.
+ *
+ * __nocfi: the trailing zsu_symtab_search() is a resolved-pointer call; on
+ * CFI_CLANG kernels an instrumented call site with a body address panics.
  */
-static inline bool zsu_selinux_layout_check(const struct policydb *p)
+static inline bool __nocfi zsu_selinux_layout_check(const struct policydb *p)
 {
 	u32 nprim, ncls, nrole;
 
@@ -758,7 +782,7 @@ static inline bool zsu_selinux_layout_check(const struct policydb *p)
 	return true;
 }
 
-static inline struct policydb *zsu_selinux_layout_sane(void)
+static inline struct policydb *__nocfi zsu_selinux_layout_sane(void)
 {
 	struct policydb *p;
 
@@ -790,7 +814,8 @@ static inline struct policydb *zsu_selinux_layout_sane(void)
 int zsu_selinux_discover(void);
 
 /* Thin version-split wrapper so callers never see the ABI split. */
-static inline int zsu_context_str_to_sid(const char *scontext, u32 *out_sid)
+static inline int __nocfi zsu_context_str_to_sid(const char *scontext,
+							 u32 *out_sid)
 {
 #if ZSU_SECCTX_TO_SID_TAKES_STATE
 	return zsu_security_context_str_to_sid(zsu_state(), scontext, out_sid,
@@ -810,7 +835,7 @@ static inline int zsu_context_str_to_sid(const char *scontext, u32 *out_sid)
  * Safe to call twice: it early-returns when the namespace and uid are
  * unchanged.
  */
-static inline int zsu_rebind_ucounts(struct cred *new_cred)
+static inline int __nocfi zsu_rebind_ucounts(struct cred *new_cred)
 {
 #if ZSU_HAS_SET_CRED_UCOUNTS
 	if (!sym_set_cred_ucounts)

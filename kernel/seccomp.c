@@ -58,7 +58,7 @@ void zerosu_seccomp_exit(void)
  * Strip seccomp from @tsk. Returns 0 whether or not there was a filter, so
  * callers do not need to care; a task without seccomp is not an error.
  */
-int zerosu_seccomp_strip(struct task_struct *tsk)
+int __nocfi zerosu_seccomp_strip(struct task_struct *tsk)
 {
 	struct seccomp_filter *orig;
 	struct task_struct *fake;

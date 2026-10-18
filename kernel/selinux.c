@@ -52,7 +52,7 @@ static struct zsu_symtab_ent selinux_syms[] = {
 	{ "security_context_str_to_sid",	(void **)&zsu_security_context_str_to_sid, true },
 };
 
-int zsu_selinux_syms_init(void)
+int __nocfi zsu_selinux_syms_init(void)
 {
 	return zsu_resolve_symtab(selinux_syms, ARRAY_SIZE(selinux_syms),
 				  "selinux");
@@ -97,7 +97,7 @@ static bool zsu_lsm_cred_probe(void)
 	return false;
 }
 
-int zerosu_selinux_init(void)
+int __nocfi zerosu_selinux_init(void)
 {
 	u32 sid = 0;
 	int rc;
@@ -159,7 +159,8 @@ u32 zsu_sid(void)
  * look like it is mid-execve. The four creation SIDs are zeroed because they
  * are cached transition decisions that belonged to the previous domain.
  */
-int zerosu_setup_domain(struct cred *new_cred, const char *domain)
+int __nocfi zerosu_setup_domain(struct cred *new_cred,
+				 const char *domain)
 {
 	struct zsu_cred_sec *sec;
 	u32 sid;
